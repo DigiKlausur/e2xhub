@@ -1,0 +1,41 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "e2xhub"
+description = "An extension of JupyterHub configuration for teaching and examination"
+readme = "README.md"
+requires-python = ">=3.7"
+license = "AGPL-3.0"
+authors = [
+  { name = "Mohammad Wasil", email = "mohammad.wasil@h-brs.de" },
+]
+classifiers=[
+    "Programming Language :: Python",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.6",
+    "Programming Language :: Python :: 3.7",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+]
+dependencies = [
+    "jupyterhub-kubespawner",
+    "pandas",
+    "pyyaml",
+]
+dynamic = ["version"]
+
+[project.urls]
+Documentation = "https://github.com/Digiklausur/e2xhub"
+Issues = "https://github.com/Digiklausur/e2xhub/issues"
+Source = "https://github.com/Digiklausur/e2xhub"
+
+[project.optional-dependencies]
+dev = [
+    "pre-commit",
+    "hatchling"
+]
+
+[tool.hatch.version]
+path = "e2xhub/__version__.py"
