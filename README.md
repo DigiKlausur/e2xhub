@@ -15,7 +15,24 @@ config:
   extraConfig:
     import os
     import sys
-    from e2xhub.e2xhub import *
+    from e2xhub import E2xHub
+    
+    # configure e2x hub volumes
+    e2xhub = E2xHub()
+    e2xhub.ipython_config_path = '/etc/ipython/ipython_config.py'
+    e2xhub.nbrader_config_path = '/etc/jupyter/nbgrader_config.py' 
+    e2xhub.home_volume_name = 'disk2'
+    e2xhub.home_volume_subpath = 'homes'
+    e2xhub.home_volume_mountpath = '/home/jovyan'
+    e2xhub.course_volume_name = 'disk2'
+    e2xhub.course_volume_subpath = 'courses'
+    e2xhub.course_volume_mountpath = '/home/jovyan/courses'
+    e2xhub.exchange_volume_name = 'disk3'
+    e2xhub.exchange_volume_subpath = 'nbgrader/exchanges'
+    e2xhub.nbgrader_exchange_root = '/srv/nbgrader/exchange'
+    e2xhub.share_volume_name = 'disk3'
+    e2xhub.share_volume_subpath = 'shares/teaching'
+    e2xhub.extra_volume_mountpath = '/srv/shares'
 
     # location of the config
     config_root = '/srv/jupyterhub/config'
@@ -31,10 +48,13 @@ config:
             exam_user_dir = get_directory(server_cfg, "exam_user_dir")
 
             # Add default course list to kubespawner profile
-            cmds, profile_list, username = init_profile_list(spawner,server_cfg)
+            cmds, profile_list, username = e2xhub.init_profile_list(spawner,server_cfg)
             
             # Update profile list
-            profile_list = configure_profile_list(spawner, server_cfg, grader_user_dir, student_user_dir)
+            profile_list = e2xhub.configure_profile_list(spawner,
+                                                         server_cfg,
+                                                         grader_user_dir,
+                                                         student_user_dir)
 
             return profile_list
         
@@ -54,7 +74,10 @@ config:
             student_user_dir = get_directory(server_cfg, "student_user_dir")
             exam_user_dir = get_directory(server_cfg, "exam_user_dir")
 
-            configure_pre_spawn_hook(spawner, server_cfg, grader_user_dir, student_user_dir)
+            e2xhub.configure_pre_spawn_hook(spawner,
+                                            server_cfg,
+                                            grader_user_dir,
+                                            student_user_dir)
             
         c.KubeSpawner.pre_spawn_hook = pre_spawn_hook
 
