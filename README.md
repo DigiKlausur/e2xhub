@@ -15,7 +15,7 @@ config:
   extraConfig:
     import os
     import sys
-    from e2xhub import E2xHub
+    from e2xhub import E2xHub, utils
     
     # configure e2x hub volumes
     e2xhub = E2xHub()
@@ -42,10 +42,10 @@ config:
     if os.path.isfile(config_file):
         def get_profile_list(spawner):
             # Load server config every time profile is requested
-            server_cfg = load_server_cfg(config_file, server_name)
-            grader_user_dir = get_directory(server_cfg, "grader_user_dir")
-            student_user_dir = get_directory(server_cfg, "student_user_dir")
-            exam_user_dir = get_directory(server_cfg, "exam_user_dir")
+            server_cfg = utils.load_server_cfg(config_file, server_name)
+            grader_user_dir = utils.get_directory(server_cfg, "grader_user_dir")
+            student_user_dir = utils.get_directory(server_cfg, "student_user_dir")
+            exam_user_dir = utils.get_directory(server_cfg, "exam_user_dir")
 
             # Add default course list to kubespawner profile
             cmds, profile_list, username = e2xhub.init_profile_list(spawner,server_cfg)
@@ -69,10 +69,10 @@ config:
             await spawner.load_user_options()
 
             # Load server config every time profile is requested
-            server_cfg = load_server_cfg(config_file, server_name)
-            grader_user_dir = get_directory(server_cfg, "grader_user_dir")
-            student_user_dir = get_directory(server_cfg, "student_user_dir")
-            exam_user_dir = get_directory(server_cfg, "exam_user_dir")
+            server_cfg = utils.load_server_cfg(config_file, server_name)
+            grader_user_dir = utils.get_directory(server_cfg, "grader_user_dir")
+            student_user_dir = utils.get_directory(server_cfg, "student_user_dir")
+            exam_user_dir = utils.get_directory(server_cfg, "exam_user_dir")
 
             e2xhub.configure_pre_spawn_hook(spawner,
                                             server_cfg,
