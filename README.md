@@ -1,4 +1,4 @@
-# e2xhub: An extension of JupyterHub for Managing Courses for Teaching and Examination with JupyterHub on Kubernetes
+# e2xhub: A JupyterHub extension for simplifying course management for teaching and exams
 
 `e2xhub` provides a user-friendly JupyterHub configuration to allow graders to easily create courses and specify their requirements. We use YAML, a well-known declarative configuration language, to allow graders to set up courses, environments and resource allocation. We use [Zero to JupyterHub with Kubernetes (Z2JH)](https://z2jh.jupyter.org) to deploy JupyterHub on our Kubernetes cluster. `e2xhub` extends the capabilities of Z2JH, allowing us to deploy a more customizable JupyterHub. 
 
