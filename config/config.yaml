@@ -1,0 +1,189 @@
+#----------------------------------------------#
+# Example server configuration fof e2x_dev hub #
+#----------------------------------------------#
+
+server:
+  # name of the hub server
+  e2x_dev:
+    # mode of the server, options: teaching or exam used to split home dir for exam and teaching
+    mode: teaching
+    
+    # default image for singleuser-server
+    image:
+      name: ghcr.io/digiklausur/docker-stacks/notebook
+      tag: latest
+      pullPolicy: Always
+    
+    # default resource for all users
+    resources:
+      cpu_guarantee: 0.001
+      cpu_limit: 2.0
+      mem_guarantee: 1G
+      mem_limit: 2G
+      
+    # grader resource
+    grader_resources:
+      cpu_guarantee: 0.001
+      cpu_limit: 4.0
+      mem_guarantee: 2G
+      mem_limit: 8G
+      
+    # location of course database for exam grading in csv files containing allowed list for each course
+    grader_user_dir: /srv/jupyterhub/config/nbgrader/grader
+    # location of course database for teaching in csv files containing allowed list for each course
+    student_user_dir: /srv/jupyterhub/config/nbgrader/teaching
+    # location of course database for exam in csv files containing allowed list for each course
+    exam_user_dir: /srv/jupyterhub/config/nbgrader/exam 
+    
+    # nbgrader config 
+    nbgrader:
+      #enable formgrader for grader so that course dirs are mounted
+      formgrader:
+        enabled: true
+        
+        # grader course config list overriding default config if specified
+        grader_course_cfg:
+          Demo:
+            WS22:
+              image: ghcr.io/digiklausur/docker-stacks/notebook:latest
+              pullPolicy: IfNotPresent
+              personalized_inbound: true
+              personalized_feedback: true
+              extra_profile_description:
+                - <span style="color:blue;">Demo WS22</span>
+            SS21:
+              image: ghcr.io/digiklausur/docker-stacks/notebook:latest
+              pullPolicy: IfNotPresent
+              personalized_inbound: true
+              personalized_feedback: true
+              extra_profile_description:
+                - <span style="color:blue;">Demo SS21</span>
+
+          # example with individualized exchange service, personalized outbound
+          # and course node affinity for a course
+          Demo-SS21:
+           image: ghcr.io/digiklausur/docker-stacks/notebook:latest
+           pullPolicy: IfNotPresent
+           # example course exchange with ngshare
+           exchange:
+            - echo from ngshare_exchange import configureExchange  >> /etc/jupyter/nbgrader_config.py
+            - echo configureExchange\(c, \"http://ngshare-ss21.e2x-teaching.svc.cluster.local:8080/services/ngshare-ss21\"\) >> /etc/jupyter/nbgrader_config.py
+           personalized_inbound: true
+           personalized_outbound: true
+           personalized_feedback: true
+           course_cmds:
+             - python -m e2xgrader activate teacher --sys-prefix
+           extra_profile_description:
+             - <span style="color:orange;">Demo Course SS21 profile for development</span>
+           resources:
+             cpu_guarantee: 0.1
+             cpu_limit: 2.0
+             mem_guarantee: 1G
+             mem_limit: 2G
+             # WARNING: DO NOT CHANGE node_affinity WITHOUT CONSULTING SYS ADMIN
+             # Users will be scheduled to nodes which have key and values in the list
+             node_affinity:
+               matchExpressions:
+               - key: "hub.jupyter.org/node-purpose"
+                 operator: In
+                 values:
+                  - "user"
+      
+      # default e2x exchange is used as default if exchange under course is not given
+      default_exchange:
+        - echo from e2xgrader.config import configure_base >> /etc/jupyter/nbgrader_config.py
+        - echo from e2xgrader.config import configure_exchange >> /etc/jupyter/nbgrader_config.py
+        - echo configure_base \(c\) >> /etc/jupyter/nbgrader_config.py
+        - echo configure_exchange \(c\) >> /etc/jupyter/nbgrader_config.py
+
+      # commands to be executed during spawning for graders
+      grader_cmds:
+        # make sure that it groupshared is enabled, because grader uid is 2000
+        # while generated dir uid set by spawner is 1000
+        - echo c.CourseDirectory.groupshared = True >> /etc/jupyter/nbgrader_config.py
+        - jupyter serverextension enable e2xgrader --py --sys-prefix
+        - e2xgrader activate teacher --sys-prefix
+
+        # if grupshared is True, set BaseConverter default permissions to 444
+        # otherwise autograded version will be writable (644), a bug????
+        - echo c.BaseConverter.permissions = 444 >> /etc/jupyter/nbgrader_config.py
+        - echo c.GenerateAssignment.permissions = 664 >> /etc/jupyter/nbgrader_config.py
+        - echo c.GenerateFeedback.permissions = 664 >> /etc/jupyter/nbgrader_config.py
+        - echo c.GenerateSolution.permissions = 664 >> /etc/jupyter/nbgrader_config.py
+        
+        # preprocessor timeout
+        - echo c.ExecutePreprocessor.timeout = 300 >> /etc/jupyter/nbgrader_config.py
+
+      # student course config list overriding default config if specified
+      student_course_cfg:
+        Demo:
+          SS21:
+            image: ghcr.io/digiklausur/docker-stacks/notebook:latest
+            pullPolicy: IfNotPresent
+            personalized_inbound: true
+            personalized_feedback: true
+            extra_profile_description:
+              - <span style="color:red;">Demo SS21</span>
+    
+    # extra mounts for all users
+    extra_mounts:
+      enabled: false
+      volume_mounts:
+        1:
+          name: disk2
+          mountPath: /srv/shared/data
+          subPath: 'shares/mrc/data'
+    
+    # extra profile list
+    extra_profile_list:
+      enabled: false
+      profiles:
+        ExtraCourse-SS21:
+          image: ghcr.io/digiklausur/docker-stacks/minimal-notebook:latest
+          pullPolicy: IfNotPresent
+          extra_profile_description:
+            - <span style="color:orange;">Extra course example</span>
+          resources:
+            cpu_guarantee: 0.1
+            cpu_limit: 2.0
+            mem_guarantee: 0.15G
+            mem_limit: 4G
+            # WARNING: DO NOT CHANGE node_affinity WITHOUT CONSULTING SYS ADMIN
+            # Users will be scheduled to nodes which have key and values in the list
+            node_affinity:
+              matchExpressions:
+              - key: "e2x.openstack.instance/flavor"
+                operator: In
+                values:
+                - "c4m32"
+              - key: "hub.jupyter.org/node-purpose"
+                operator: In
+                values:
+                - "user"
+                
+    # commands to be executed during post spawning
+    commands:
+      # set nbgrader timezone
+      - echo c.NbGraderAPI.timezone = \"Europe/Berlin\" >> /etc/jupyter/nbgrader_config.py
+      - echo c.Exchange.timezone = \"Europe/Berlin\" >> /etc/jupyter/nbgrader_config.py
+      
+      # cull idle kernel
+      - echo \\n\# Cull kernel >> /etc/jupyter/jupyter_notebook_config.py
+      - echo c.MappingKernelManager.cull_idle_timeout = 7200 >> /etc/jupyter/jupyter_notebook_config.py
+      - echo c.MappingKernelManager.cull_interval = 300 >> /etc/jupyter/jupyter_notebook_config.py
+      - echo c.MappingKernelManager.cull_connected = True >> /etc/jupyter/jupyter_notebook_config.py
+
+      # e2x preprocessor (multiple choice, scrambling, etc)
+      # https://github.com/DigiKlausur/e2xgrader
+      - echo c.Autograde.sanitize_preprocessors = \[\'nbgrader.preprocessors.ClearOutput\',\'nbgrader.preprocessors.DeduplicateIds\',\'nbgrader.preprocessors.OverwriteKernelspec\',\'e2xgrader.preprocessors.OverwriteCells\',\'nbgrader.preprocessors.CheckCellMetadata\',\'e2xgrader.preprocessors.Unscramble\',\] >> /etc/jupyter/nbgrader_config.py
+      - echo c.Autograde.autograde_preprocessors = \[\'nbgrader.preprocessors.Execute\',\'nbgrader.preprocessors.LimitOutput\',\'e2xgrader.preprocessors.SaveAutoGrades\',\'nbgrader.preprocessors.AssignLatePenalties\',\'nbgrader.preprocessors.CheckCellMetadata\',\] >> /etc/jupyter/nbgrader_config.py
+      - echo c.GenerateAssignment.preprocessors = \[\'e2xgrader.preprocessors.ValidateExtraCells\',\'nbgrader.preprocessors.IncludeHeaderFooter\',\'nbgrader.preprocessors.LockCells\',\'e2xgrader.preprocessors.ClearSolutions\',\'nbgrader.preprocessors.ClearOutput\',\'nbgrader.preprocessors.CheckCellMetadata\',\'nbgrader.preprocessors.ComputeChecksums\',\'e2xgrader.preprocessors.SaveCells\',\'e2xgrader.preprocessors.ClearHiddenTests\',\'nbgrader.preprocessors.ClearMarkScheme\',\'nbgrader.preprocessors.ComputeChecksums\',\'nbgrader.preprocessors.CheckCellMetadata\',\] >> /etc/jupyter/nbgrader_config.py
+
+      - echo c.CourseDirectory.ignore = \[\".ipynb_checkpoints\", \"*.pyc*\", \"__pycache__\", \"feedback\", \".*\"\] >> /etc/jupyter/nbgrader_config.py
+    
+    # e2x exam kernel config
+    # https://github.com/DigiKlausur/exam_kernel
+    exam_kernel:
+      allowed_imports: ['typing','sympy','rapidfuzz','math','numpy','pandas','random','scipy','collections','itertools','matplotlib','glob','fractions','functools','re', 'assignmenttest', 'numbers', 'solution']
+      init_code: ['import math','import collections','import itertools','import glob','import numpy as np','import pandas as pd','import random as rd','import matplotlib.pyplot as plt','from scipy import stats','from fractions import Fraction','\%matplotlib inline']
+      allowed_magics: ['matplotlib','time','timeit']
