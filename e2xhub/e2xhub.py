@@ -944,16 +944,14 @@ class E2xHub(LoggingConfigurable):
             self.configure_student_volumes(spawner, 
                                   course_cfg_list,
                                   server_mode="exam")
-#         # set additional course and extra volume mounts
-#         if selected_profile != "Default":
-#             # set extra course volume mounts
-#             read_only = False if is_grader else True
-#             self.configure_extra_course_volumes(spawner,
-#                                                 selected_profile, 
-#                                                 read_only=read_only)
+        # set additional course and extra volume mounts
+        if selected_profile != "Default":
+            # set extra course volume mounts
+            read_only = False if is_grader else True
+            self.configure_extra_course_volumes(spawner, read_only=read_only)
 
-#             # set extra volume mounts
-#             if check_consecutive_keys(server_cfg, "extra_mounts", "enabled"):
-#                 if server_cfg["extra_mounts"]["enabled"]:
-#                     vol_mounts = server_cfg["extra_mounts"]
-#                     self.configure_extra_volumes(spawner, vol_mounts, read_only)
+            # set extra volume mounts
+            if check_consecutive_keys(server_cfg, "extra_mounts", "enabled"):
+                if server_cfg["extra_mounts"]["enabled"]:
+                    vol_mounts = server_cfg["extra_mounts"]
+                    self.configure_extra_volumes(spawner, vol_mounts, read_only)
