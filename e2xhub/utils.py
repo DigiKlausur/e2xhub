@@ -152,3 +152,54 @@ def add_allowed_users(c, users):
         users: users to be added to JupyterHub
     """
     c.Authenticator.allowed_users |= set(users)
+    
+def get_course_config_and_user(course_list_path):
+    """
+    Get course config and user list
+    """
+    
+    course_directories = [item for item in course_list_path.iterdir() 
+                          if item.is_dir() and not item.name.startswith('.')]
+
+    course_cfg_and_user = {}
+    for course_path in course_directories:
+        # loop through grader and student list
+        role_directories = [item for item in course_path.iterdir() 
+                            if item.is_dir() and not item.name.startswith('.')
+                            and ("grader" in item.name.lower() or "student" in item.name.lower())]
+
+        if not role_directories:
+            continue
+        
+        course_cfg_and_user[course_path.name] = {}
+        
+        for role_path in role_directories:
+            config_list_path = [item for item in role_path.iterdir() 
+                                if item.is_file() and not item.name.startswith('.')
+                                and ("yaml" in item.name.lower() or "yml" in item.name.lower())]
+            user_list_path = [item for item in role_path.iterdir() 
+                              if item.is_file() and not item.name.startswith('.')
+                              and "csv" in item.name.lower()]
+
+            if not config_list_path:  
+                #course_cfg[course_path.name][role_path.name]['config_list_path'] = config_list_path
+                continue
+
+            if not user_list_path:
+                continue
+                #course_cfg[course_path.name][role_path.name]['user_list_path'] = user_list_path
+            
+            # get users for each course from each semester, the name of user list file
+            # should represent the name of the course id for each semester
+            course_cfg_and_user[course_path.name][role_path.name] = {}
+            for ul in user_list_path:
+                user_list = list(pd.read_csv(ul).Username.str.strip())
+                course_cfg_and_user[course_path.name][role_path.name][ul.stem] = {}
+                course_cfg_and_user[course_path.name][role_path.name][ul.stem]['course_members'] = user_list
+                course_cfg_and_user[course_path.name][role_path.name][ul.stem]['course_members_path'] = ul
+                
+                # course config path
+                course_config_path = [ccpath for ccpath in config_list_path if ul.stem in ccpath.stem][0]
+                course_cfg_and_user[course_path.name][role_path.name][ul.stem]['course_config_path'] = course_config_path
+                    
+    return course_cfg_and_user
