@@ -1,5 +1,6 @@
 import os
-from .utils import *
+from pathlib import Path
+#from utils import *
 import pandas as pd
 from traitlets import Unicode
 from traitlets.config import LoggingConfigurable
@@ -41,12 +42,12 @@ class E2xHub(LoggingConfigurable):
         """,
     ).tag(config=True)
 
-    home_volume_mountpath = Unicode(
-        '/home/jovyan',
-        help="""
-        Home volume mount path on the nfs client
-        """,
-    ).tag(config=True)
+    #home_volume_mountpath = Unicode(
+    #    '/home/jovyan',
+    #    help="""
+    #    Home volume mount path on the nfs client
+    #    """,
+    #).tag(config=True)
 
     course_volume_name = Unicode(
         'disk2',
@@ -63,12 +64,12 @@ class E2xHub(LoggingConfigurable):
         """,
     ).tag(config=True)
 
-    course_volume_mountpath = Unicode(
-        '/home/jovyan/courses',
-        help="""
-        Course volume mount path for graders on the nfs client.
-        """,
-    ).tag(config=True)
+    #course_volume_mountpath = Unicode(
+    #    '/home/jovyan/courses',
+    #    help="""
+    #    Course volume mount path for graders on the nfs client.
+    #    """,
+   #).tag(config=True)
 
     exchange_volume_name = Unicode(
         'disk3',
@@ -305,8 +306,8 @@ class E2xHub(LoggingConfigurable):
 
         # Default nbgrader commands
         cmds = []
-        cmds.append(f"echo 'import os'  >> {self.nbgrader_config_path}")
-        cmds.append(f"echo 'c = get_config()'  >> {self.nbgrader_config_path}")
+        #cmds.append(f"echo 'import os'  >> {self.nbgrader_config_path}")
+        #cmds.append(f"echo 'c = get_config()'  >> {self.nbgrader_config_path}")
 
         profile_list = []
 
@@ -370,8 +371,8 @@ class E2xHub(LoggingConfigurable):
     def configure_nbgrader(self, spawner,
                            nbgrader_cfg,
                            course_cfg,
-                           course_id, 
-                           course_root,
+                           course_id,
+                           course_id_path,
                            cmds,
                            sum_cmds,
                            student=True):
@@ -382,17 +383,19 @@ class E2xHub(LoggingConfigurable):
             nbgrader_cfg: global and default nbgrader config, this is overrided by the course-specific
             nbgrader config
             course_cfg: course configuration containing course list with its configs
-            course_id: the id of the course (e.g. WuS-WS20) to which nbgrader configs are applied
-            course_root: path to the course root
+            course_id: course id e.g. MRC-Teaching-SS23
+            course_id_path: path to the course id root e.g. $HOME/courses/MRC-Teaching/MRC-Teaching-SS23
             cmds: commands executed when the server starts spawning
             sum_cmds: number of commands before nbgrader related commands added
             student: whether the server is configured for students
         """
         # Set course id and course root
+        #cmds.append(f"echo \'import os\'  >> {self.nbgrader_config_path}")
         cmds.append(f"echo \'c.CourseDirectory.course_id = \"{course_id}\"\'  >> {self.nbgrader_config_path}")
         sum_cmds += 1
         if not student:
-            cmds.append(f"echo \'c.CourseDirectory.root = os.path.abspath(\"{course_root}/{course_id}\")\'  >> {self.nbgrader_config_path}")
+            cmds.append(f"echo \'c.CourseDirectory.root = \"{course_id_path}\"\'  >> {self.nbgrader_config_path}")
+            #cmds.append(f"echo \'c.CourseDirectory.root = os.path.abspath(\"{course_id_path}\")\'  >> {self.nbgrader_config_path}")
             sum_cmds += 1      
 
         #Setup exchange, write all commands to enable the exchange
@@ -452,10 +455,8 @@ class E2xHub(LoggingConfigurable):
 
     def generate_course_profile(self, spawner,
                                 nbgrader_cfg,
-                                course_cfg, 
-                                allowed_users,
-                                username, 
                                 cmds,
+                                course_cfg_list,
                                 role="student"):
         """
         Generate course profile from the given course list and config
@@ -463,27 +464,31 @@ class E2xHub(LoggingConfigurable):
             spawner: kubespawner object
             nbgrader_cfg: global and default nbgrader config, this is overrided by the course-specific
             nbgrader config
-            course_cfg: course configuration containing course list with its configs
-            allowed_users: list of allowed users or registered users for the course
-            username: username of the current user
+            course_cfg_list: course configuration containing course list with its configs
             cmds: commands executed when the server starts spawning
             role: role of the current user e.g. student or grader
         """
         sum_cmds = 0
         profile_list = []
-        for course_name in allowed_users.keys():
-            for semester_id in allowed_users[course_name]:
-                if username in allowed_users[course_name][semester_id]:
+        for course_name in course_cfg_list.keys():
+            for course_id in course_cfg_list[course_name][role].keys():
+                course_members = course_cfg_list[course_name][role][course_id]['course_members']
+                if spawner.user.name in course_members:
                     # set course id, that is the combination of course name and smt id
-                    course_id = course_name + "-" + semester_id
+                    #course_id = course_name + "-" + semester_id
                     # ToDo: make this path as argument
-                    course_root = f"{self.course_volume_mountpath}/{course_name}"
+                    course_id_path = f"/home/{spawner.user.name}/courses/{course_name}/{course_id}"
 
-                    # Initialize nbgrader config for the course
-                    curr_course_cfg = course_cfg[course_name][semester_id]
+                    # Add configuration for each course
+                    course_config_path = course_cfg_list[course_name][role][course_id]['course_config_path']
+                    curr_course_cfg = load_yaml(course_config_path)
+                    if curr_course_cfg is None:
+                        spawner.log.warning("No course config found")
+                        curr_course_cfg = {}
+                        
                     cmds, sum_cmds = self.configure_nbgrader(spawner, nbgrader_cfg, 
                                                         curr_course_cfg, course_id,
-                                                        course_root, cmds, sum_cmds,
+                                                        course_id_path, cmds, sum_cmds,
                                                         student=False if role=="grader" else True)
 
                     # course specific commands e.g. enable exam mode for specific course
@@ -508,138 +513,127 @@ class E2xHub(LoggingConfigurable):
                     sum_cmds = 0
 
         return profile_list
-
-    # set grader mounts
+    
     def configure_grader_volumes(self, spawner,
-                                 course_cfg,
-                                 selected_profile,
-                                 username, 
-                                 grader_user_dir,
-                                 server_mode="teaching", 
+                                 course_cfg_list,
+                                 server_mode="teaching",
                                  ):
         """
         Configure grader volumes
         args:
           spawner: spawner object
-          course_cfg: list of available courses
           selected_profile: selected course by the user
-          username: username of the user
-          grader_user_dir: grader user directory that contains list of all courses containing grader username
           server_mode: whether teaching or exam mode, used to differentiate
           home directory location on the nfs server. It's useful when the exam and
           teaching servers are deployed on the same hub.
         """
         is_grader = False
+        selected_profile = spawner.user_options['profile']
+        
         course_id = selected_profile.split("--")[0]
+        username = spawner.user.name
 
         # course name and semester id
-        course_name, smt_id = course_id.split("-")
+        print("Course id: ",course_id)
+        course_name, course_mode, smt_id = course_id.split("-")
+        course_name = f"{course_name}-{course_mode}"
+        
+        course_members = course_cfg_list[course_name]['grader'][course_id]['course_members']
+        
 
-        # check if the use selected the grader course id, and he is a grader
-        #if course_id in course_cfg:
-        if check_consecutive_keys(course_cfg, course_name, smt_id):
-            grader_course_cfg = course_cfg[course_name][smt_id] 
-            # check if list of grader exists
-            grader_course_id_member_file = os.path.join(grader_user_dir, course_id+".csv")
+        # mount home dir and the selected course dir if the user is grader
+        if username in course_members and course_id != "Default":
+            # Load grader course config if given
+            course_config_path = course_cfg_list[course_name]['grader'][course_id]['course_config_path']
+            grader_course_cfg = load_yaml(course_config_path)
+            if grader_course_cfg is None:
+                spawner.log.warning("No grader course config found")
+                grader_course_cfg = {}
+            
+            # home volume subpath for grader
+            home_volume_mountpath = f'/home/{username}'
+            home_volume_subpath = os.path.join(self.home_volume_subpath,
+                                               server_mode, 
+                                               "graders",
+                                               username)
+            home_volume_mount = configure_volume_mount(self.home_volume_name,
+                                                       home_volume_mountpath,
+                                                       home_volume_subpath)
 
-            if os.path.isfile(grader_course_id_member_file):
-                spawner.log.debug("Found course file %s", grader_course_id_member_file)
-                db_file_pd = pd.read_csv(grader_course_id_member_file)
-                grader_list = list(db_file_pd.Username.apply(str))
+            spawner.log.debug("Grader home volume name: %s", self.home_volume_name)
+            spawner.log.debug("Grader home volume mountpath: %s", home_volume_mountpath)
+            spawner.log.debug("Grader home volume subpath: %s", home_volume_subpath)
+            if self.home_volume_name:
+                spawner.volume_mounts.append(home_volume_mount)
 
-                # mount home dir and the selected course dir if the user is grader
-                if username in grader_list and course_id != "Default":
-                    # home volume subpath for grader
-                    home_volume_subpath = os.path.join(self.home_volume_subpath,
-                                                       server_mode, 
-                                                       "graders",
-                                                       username)
-                    home_volume_mount = configure_volume_mount(self.home_volume_name,
-                                                               self.home_volume_mountpath,
-                                                               home_volume_subpath)
-                    
-                    spawner.log.debug("Grader home volume name: %s", self.home_volume_name)
-                    spawner.log.debug("Grader home volume mountpath: %s", self.home_volume_mountpath)
-                    spawner.log.debug("Grader home volume subpath: %s", home_volume_subpath)
-                    if self.home_volume_name:
-                        spawner.volume_mounts.append(home_volume_mount)
+            # mount previous course?
+            mount_prev_courses = True
+            if "mount_prev_courses" in grader_course_cfg:
+                mount_prev_courses = grader_course_cfg['mount_prev_courses']
 
-                    # mount previous course?
-                    mount_prev_courses = True
-                    if "mount_prev_courses" in grader_course_cfg:
-                        mount_prev_courses = grader_course_cfg['mount_prev_courses']
-
-                    # check if student is the grader, and mount_prev_course is allowed
-                    # to avoid the student grader see other students submission from his/her batch
-                    if not mount_prev_courses and "2s" in username:
-                        course_volume_mountpath = f'{self.course_volume_mountpath}/{course_name}/{course_id}'
-                        course_volume_subpath = os.path.join(self.course_volume_subpath,
-                                                             course_name,
-                                                             course_id) 
-                    else:
-                        # todo: the problem with mounting all vols to graders, we cann't exclude student graders
-                        # for the courses he/she was taking the course at the time. The reason is he/she is not
-                        # allowed to see her/his peers submissions
-                        course_volume_mountpath = f'{self.course_volume_mountpath}/{course_name}'
-                        course_volume_subpath = os.path.join(self.course_volume_subpath, course_name) 
-
-                    course_volume_mount = configure_volume_mount(self.course_volume_name,
-                                                                 course_volume_mountpath,
-                                                                 course_volume_subpath)
-
-                    spawner.log.debug("Grader course volume name: %s", self.course_volume_name)
-                    spawner.log.debug("Grader course volume mountpath: %s", course_volume_mountpath)
-                    spawner.log.debug("Grader course volume subpath: %s", course_volume_subpath)
-
-                    if self.course_volume_name:
-                        spawner.volume_mounts.append(course_volume_mount)
-
-                    # set exchange volume
-                    if "exchange" in grader_course_cfg:
-                        spawner.log.info("[grader][exchange] using given exchange service")
-                    else:
-                        exchange_volume_mountpath = os.path.join(self.nbgrader_exchange_root, course_id)
-                        exchange_volume_subpath = os.path.join(self.exchange_volume_subpath,
-                                                               course_name, course_id) 
-
-                        exchange_volume_mount = configure_volume_mount(self.exchange_volume_name,
-                                                               exchange_volume_mountpath,
-                                                               self.exchange_volume_subpath,
-                                                               read_only=False)
-
-                        spawner.log.debug("Grader exchange volume name is: %s", self.home_volume_name)
-                        if self.exchange_volume_name:
-                            spawner.volume_mounts.append(exchange_volume_mount)
-
-                    is_grader = True
-
-                    # set grader environment e.g. uid and gid
-                    spawner.log.debug("Changing uid and gid for grader: %s to %s %s", 
-                                       username, self.grader_uid, self.grader_gid)
-                    spawner.environment = {'NB_USER':username,
-                                           'NB_UID':f'{self.grader_uid}',
-                                           'NB_GID':f'{self.grader_gid}'}
+            # check if student is the grader, and mount_prev_course is allowed
+            # to avoid the student grader see other students submission from his/her batch
+            if not mount_prev_courses and "2s" in username:
+                course_volume_mountpath = f'/home/{username}/courses/{course_name}/{course_id}'
+                course_volume_subpath = os.path.join(self.course_volume_subpath,
+                                                     course_name,
+                                                     course_id) 
             else:
-                spawner.log.warning("Grader course list not found: %s",grader_course_id_member_file)
+                # todo: the problem with mounting all vols to graders, we cann't exclude student graders
+                # for the courses he/she was taking the course at the time. The reason is he/she is not
+                # allowed to see her/his peers submissions
+                course_volume_mountpath = f'/home/{username}/courses/{course_name}'
+                course_volume_subpath = os.path.join(self.course_volume_subpath, course_name) 
+
+            course_volume_mount = configure_volume_mount(self.course_volume_name,
+                                                         course_volume_mountpath,
+                                                         course_volume_subpath)
+
+            spawner.log.debug("Grader course volume name: %s", self.course_volume_name)
+            spawner.log.debug("Grader course volume mountpath: %s", course_volume_mountpath)
+            spawner.log.debug("Grader course volume subpath: %s", course_volume_subpath)
+
+            if self.course_volume_name:
+                spawner.volume_mounts.append(course_volume_mount)
+
+            # set exchange volume
+            if "exchange" in grader_course_cfg:
+                spawner.log.info("[grader][exchange] using given exchange service")
+            else:
+                exchange_volume_mountpath = os.path.join(self.nbgrader_exchange_root, course_id)
+                exchange_volume_subpath = os.path.join(self.exchange_volume_subpath,
+                                                       course_name, course_id) 
+
+                exchange_volume_mount = configure_volume_mount(self.exchange_volume_name,
+                                                       exchange_volume_mountpath,
+                                                       self.exchange_volume_subpath,
+                                                       read_only=False)
+
+                spawner.log.debug("Grader exchange volume name is: %s", self.home_volume_name)
+                if self.exchange_volume_name:
+                    spawner.volume_mounts.append(exchange_volume_mount)
+
+            is_grader = True
+
+            # set grader environment e.g. uid and gid
+            spawner.log.debug("Changing uid and gid for grader: %s to %s %s", 
+                               username, self.grader_uid, self.grader_gid)
+            spawner.environment = {'NB_USER':username,
+                                   'NB_UID':f'{self.grader_uid}',
+                                   'NB_GID':f'{self.grader_uid}'}
 
         return is_grader
-
+    
     # set students volume mount
     def configure_student_volumes(self, spawner, 
-                                  course_cfg, 
-                                  selected_profile, 
-                                  username,
-                                  student_user_dir,
+                                  course_cfg_list,
                                   server_mode="teaching",
                                   ):
         """
         Configure volume mounts for the student
         args:
           spawner: spawner object
-          course_cfg: list of available courses
-          selected_profile: selected course by the user
           username: username of the user
-          student_user_dir: student user directory that contains list of all courses containing student username
           server_mode: whether teaching or exam mode, used to differentiate
           home directory location on the nfs server. It's useful when the exam and
           teaching servers are deployed on the same hub.
@@ -648,23 +642,35 @@ class E2xHub(LoggingConfigurable):
         """
         # currently the course slug for student is e.g. WuS-SS22--student (course_name-semester_id-role)
         # to differentiate between grader's and student's course slug
-        student_course_id = selected_profile.split("--")[0]
+        selected_profile = spawner.user_options['profile']
+        
+        course_id = selected_profile.split("--")[0]
+        username = spawner.user.name
 
         # course name and semester id
-        course_name, smt_id = student_course_id.split("-")
+        print("Course id: ",course_id)
+        course_name, course_mode, smt_id = course_id.split("-")
+        course_name = f"{course_name}-{course_mode}"
+        
+        course_members = course_cfg_list[course_name]['student'][course_id]['course_members']
 
-        if check_consecutive_keys(course_cfg, course_name, smt_id):
-            # course config for the given course_name and smt_id   
-            student_course_cfg = course_cfg[course_name][smt_id]
-
+        if username in course_members:
+            # Load grader course config if given
+            course_config_path = course_cfg_list[course_name]['student'][course_id]['course_config_path']
+            student_course_cfg = load_yaml(course_config_path)
+            if student_course_cfg is None:
+                spawner.log.warning("No studnent course config found")
+                student_course_cfg = {}
+            
+            home_volume_mountpath = f'/home/{username}'
             home_volume_subpath = os.path.join(self.home_volume_subpath,
                                                server_mode,
                                                "students", 
-                                               student_course_id,
+                                               course_id,
                                                username)
 
             home_volume_mount = configure_volume_mount(self.home_volume_name,
-                                                       self.home_volume_mountpath,
+                                                       home_volume_mountpath,
                                                        home_volume_subpath)
 
             spawner.log.debug("Student home volume name is: %s", self.home_volume_name)
@@ -673,123 +679,124 @@ class E2xHub(LoggingConfigurable):
 
             # setup exchange volumes if default nbgrader exchange is used
             if "exchange" in student_course_cfg:
-                # ToDo: configure exchange
-                spawner.log.debug("[student][exchange] using given exchange service")
+                # Only web-based exchange supported 
+                spawner.log.info("[student][exchange] Using given exchange service (Note only web-based exchange supported)")
             else:
                 spawner.log.debug("[student][exchange] using default exchange directory")
                 # ToDo: make user_list_root as an argument
-                course_id_member_file = os.path.join(student_user_dir, student_course_id+".csv")
-                if os.path.isfile(course_id_member_file):
-                    db_file_pd = pd.read_csv(course_id_member_file)
-                    user_list = list(db_file_pd.Username.apply(str))
+                #course_id_member_file = os.path.join(student_user_dir, course_id+".csv")
+                #if os.path.isfile(course_id_member_file):
+                #    db_file_pd = pd.read_csv(course_id_member_file)
+                #    user_list = list(db_file_pd.Username.apply(str))
 
-                    if username in user_list:
-                        spawner.log.info("[pre spawn hook] found course %s for %s", student_course_id, username)
-                        # check whether personalized inbound or outbound enabled
-                        personalized_outbound = False
-                        if "personalized_outbound" in student_course_cfg:
-                            personalized_outbound = student_course_cfg['personalized_outbound']
-                        if personalized_outbound:
-                            if "assignment_id" in student_course_cfg:
-                                assignment_id = student_course_cfg['assignment_id']
-                            else:
-                                spawner.log.info("[inbound] Using personalized outbound, but assignment_id is \
-                                                  not given. The assignment_id will be unknown")
-                                assignment_id = "unknown-assignment"
+                #if username in user_list:
+                
+                spawner.log.info("[pre spawn hook] found course %s for %s", course_id, username)
+                # check whether personalized inbound or outbound enabled
+                personalized_outbound = False
+                if "personalized_outbound" in student_course_cfg:
+                    personalized_outbound = student_course_cfg['personalized_outbound']
+                if personalized_outbound:
+                    if "assignment_id" in student_course_cfg:
+                        assignment_id = student_course_cfg['assignment_id']
+                    else:
+                        spawner.log.info("[inbound] Using personalized outbound, but assignment_id is \
+                                          not given. The assignment_id will be unknown")
+                        assignment_id = "unknown-assignment"
 
-                            outbound_mount_mountpath = os.path.join(self.nbgrader_exchange_root, 
-                                                              student_course_id, 
-                                                              "personalized-outbound", 
-                                                              assignment_id, 
-                                                              username)
-                            outbound_volume_subpath = os.path.join(self.exchange_volume_subpath, 
-                                                                            course_name, 
-                                                                            student_course_id, 
-                                                                            "personalized-outbound",
-                                                                            assignment_id, username)
-                        else: 
-                            spawner.log.info("[outbound] Using default outbound")
-                            outbound_mount_mountpath = os.path.join(self.nbgrader_exchange_root, 
-                                                              student_course_id, 
-                                                              "outbound")
-                            outbound_volume_subpath = os.path.join(self.exchange_volume_subpath, 
-                                                                            course_name, 
-                                                                            student_course_id, 
-                                                                            "outbound")
+                    outbound_mount_mountpath = os.path.join(self.nbgrader_exchange_root, 
+                                                      course_id, 
+                                                      "personalized-outbound", 
+                                                      assignment_id, 
+                                                      username)
+                    outbound_volume_subpath = os.path.join(self.exchange_volume_subpath, 
+                                                                    course_name, 
+                                                                    course_id, 
+                                                                    "personalized-outbound",
+                                                                    assignment_id, username)
+                else: 
+                    spawner.log.info("[outbound] Using default outbound")
+                    outbound_mount_mountpath = os.path.join(self.nbgrader_exchange_root, 
+                                                      course_id, 
+                                                      "outbound")
+                    outbound_volume_subpath = os.path.join(self.exchange_volume_subpath, 
+                                                                    course_name, 
+                                                                    course_id, 
+                                                                    "outbound")
 
-                        outbound_volume_mount = configure_volume_mount(self.exchange_volume_name,
-                                                                   outbound_mount_mountpath,
-                                                                   outbound_volume_subpath,
-                                                                   read_only=True)
+                outbound_volume_mount = configure_volume_mount(self.exchange_volume_name,
+                                                           outbound_mount_mountpath,
+                                                           outbound_volume_subpath,
+                                                           read_only=True)
 
-                        # configure inbound
-                        personalized_inbound = False
-                        if "personalized_inbound" in student_course_cfg:
-                            personalized_inbound = student_course_cfg['personalized_inbound']
-                        if personalized_inbound:
-                            spawner.log.info("[inbound] Using personalized inbound directory")
-                            inbound_volume_mountpath = os.path.join(self.nbgrader_exchange_root, 
-                                                             student_course_id, 
-                                                             "personalized-inbound", 
-                                                             username)
-                            inbound_volume_subpath = os.path.join(self.exchange_volume_subpath,
-                                                                           course_name, 
-                                                                           student_course_id, 
-                                                                           "personalized-inbound", 
-                                                                           username)
-                        else:
-                            spawner.log.info("[inbound] Using default submit directory")
-                            inbound_volume_mountpath = os.path.join(self.nbgrader_exchange_root, 
-                                                             student_course_id, 
-                                                             "inbound")
-                            inbound_volume_subpath = os.path.join(self.exchange_volume_subpath, 
-                                                                           course_name, 
-                                                                           student_course_id, 
-                                                                           "inbound")
-
-                        inbound_volume_mount = configure_volume_mount(self.exchange_volume_name,
-                                                                   inbound_volume_mountpath,
-                                                                   inbound_volume_subpath)
-                        # configure feedback
-                        personalized_feedback = False
-                        if "personalized_feedback" in student_course_cfg:
-                            personalized_feedback = student_course_cfg['personalized_feedback']
-                        if personalized_feedback:
-                            spawner.log.info("[feedback] using personalized feedback directory")
-                            feedback_volume_mountpath = os.path.join(self.nbgrader_exchange_root, 
-                                                              student_course_id, 
-                                                              "personalized-feedback", 
-                                                              username)
-                            feedback_volume_subpath = os.path.join(self.exchange_volume_subpath,
-                                                                            course_name, 
-                                                                            student_course_id, 
-                                                                            "personalized-feedback", 
-                                                                            username)
-                        else:
-                            spawner.log.info("[feedback] using default feedback directory")
-                            feedback_volume_mountpath = os.path.join(self.nbgrader_exchange_root, 
-                                                              student_course_id, 
-                                                              "feedback")
-                            feedback_volume_subpath = os.path.join(self.exchange_volume_subpath, 
+                # configure inbound
+                personalized_inbound = False
+                if "personalized_inbound" in student_course_cfg:
+                    personalized_inbound = student_course_cfg['personalized_inbound']
+                if personalized_inbound:
+                    spawner.log.info("[inbound] Using personalized inbound directory")
+                    inbound_volume_mountpath = os.path.join(self.nbgrader_exchange_root, 
+                                                     course_id, 
+                                                     "personalized-inbound", 
+                                                     username)
+                    inbound_volume_subpath = os.path.join(self.exchange_volume_subpath,
                                                                    course_name, 
-                                                                   student_course_id, 
-                                                                   "feedback")
-
-                        feedback_volume_mount = configure_volume_mount(self.exchange_volume_name,
-                                                                   feedback_volume_mountpath,
-                                                                   feedback_volume_subpath,
-                                                                   read_only=True)
-
-                        spawner.log.debug("Student exchange/inbound volume name is: %s", self.exchange_volume_name)
-                        if self.exchange_volume_name:
-                            spawner.volume_mounts.append(outbound_volume_mount)
-                            spawner.volume_mounts.append(inbound_volume_mount)
-                            spawner.volume_mounts.append(feedback_volume_mount)
-                        else:
-                            spawner.log.warning("Student exchange volume name is: %s",self.exchange_volume_name,
-                                                "consult k8s admin to provide the volume for exchange")
+                                                                   course_id, 
+                                                                   "personalized-inbound", 
+                                                                   username)
                 else:
-                    spawner.log.warning("Course file not found: %s",course_id_member_file)
+                    spawner.log.info("[inbound] Using default submit directory")
+                    inbound_volume_mountpath = os.path.join(self.nbgrader_exchange_root, 
+                                                     course_id, 
+                                                     "inbound")
+                    inbound_volume_subpath = os.path.join(self.exchange_volume_subpath, 
+                                                                   course_name, 
+                                                                   course_id, 
+                                                                   "inbound")
+
+                inbound_volume_mount = configure_volume_mount(self.exchange_volume_name,
+                                                           inbound_volume_mountpath,
+                                                           inbound_volume_subpath)
+                # configure feedback
+                personalized_feedback = False
+                if "personalized_feedback" in student_course_cfg:
+                    personalized_feedback = student_course_cfg['personalized_feedback']
+                if personalized_feedback:
+                    spawner.log.info("[feedback] using personalized feedback directory")
+                    feedback_volume_mountpath = os.path.join(self.nbgrader_exchange_root, 
+                                                      course_id, 
+                                                      "personalized-feedback", 
+                                                      username)
+                    feedback_volume_subpath = os.path.join(self.exchange_volume_subpath,
+                                                                    course_name, 
+                                                                    course_id, 
+                                                                    "personalized-feedback", 
+                                                                    username)
+                else:
+                    spawner.log.info("[feedback] using default feedback directory")
+                    feedback_volume_mountpath = os.path.join(self.nbgrader_exchange_root, 
+                                                      course_id, 
+                                                      "feedback")
+                    feedback_volume_subpath = os.path.join(self.exchange_volume_subpath, 
+                                                           course_name, 
+                                                           course_id, 
+                                                           "feedback")
+
+                feedback_volume_mount = configure_volume_mount(self.exchange_volume_name,
+                                                           feedback_volume_mountpath,
+                                                           feedback_volume_subpath,
+                                                           read_only=True)
+
+                spawner.log.debug("Student exchange/inbound volume name is: %s", self.exchange_volume_name)
+                if self.exchange_volume_name:
+                    spawner.volume_mounts.append(outbound_volume_mount)
+                    spawner.volume_mounts.append(inbound_volume_mount)
+                    spawner.volume_mounts.append(feedback_volume_mount)
+                else:
+                    spawner.log.warning("Student exchange volume name is: %s",self.exchange_volume_name,
+                                        "consult k8s admin to provide the volume for exchange")
+                #else:
+                #    spawner.log.warning("Course file not found: %s",course_id_member_file)
 
 
             # set student uid=1000, gid=1000. This translates student user to jovyan user
@@ -799,9 +806,8 @@ class E2xHub(LoggingConfigurable):
                                    'NB_UID':f'{self.student_uid}',
                                    'NB_GID':f'{self.student_gid}'}
             
-    def configure_extra_course_volumes(self, spawner,
-                                       selected_profile, 
-                                       read_only=True):
+            
+    def configure_extra_course_volumes(self, spawner, read_only=True):
         """
         Add extra volume mounts for a particular course (selected profile).
         Public directory /srv/shares/public is always mounted to all courses,
@@ -809,7 +815,6 @@ class E2xHub(LoggingConfigurable):
         Whereas private volume mount is only accessible to the registered users.
         args:
           spawner: spawner object
-          selected_profile: selected course profile
           read_only: whether the vol mounts are read_only to users
         """
         # mount public/common dirs: e.g. instructions and cheatsheets
@@ -822,12 +827,17 @@ class E2xHub(LoggingConfigurable):
                                                      read_only=read_only)
 
         # course specific shared files / dirs within the selected course
-        share_course_id = selected_profile.split("--")[0]
-        share_course_name = share_course_id.split("-")[0]
-        private_volume_mountpath = f"{self.extra_volume_mountpath}/{share_course_name}"
+        selected_profile = spawner.user_options['profile']
+        course_id = selected_profile.split("--")[0]
+
+        # course name and semester id
+        course_name, course_mode, smt_id = course_id.split("-")
+        course_name = f"{course_name}-{course_mode}"
+        
+        private_volume_mountpath = f"{self.extra_volume_mountpath}/{course_name}"
         private_volume_subpath = os.path.join(self.share_volume_subpath, 
-                                                       "courses", 
-                                                       "{}".format(share_course_name))
+                                              "courses", 
+                                              "{}".format(course_name))
 
         private_volume_mount = configure_volume_mount(self.share_volume_name,
                                                       private_volume_mountpath,
@@ -860,47 +870,40 @@ class E2xHub(LoggingConfigurable):
                                                   read_only=read_only)
             spawner.volume_mounts.append(extra_vmount)
 
-    # ToDo: move the following functionalities to spawner_utils.py
-    def configure_profile_list(self, spawner,
-                               server_cfg,
-                               grader_user_dir,
-                               student_user_dir
-                              ):
+    def configure_profile_list(self, spawner,server_cfg):
         """
         Configure profile list given server configuration
         args:
             spawner: kubespawner object
             server_cfg: server configuration
-            grader_user_dir: grader user directory that contains list of all courses containing grader username
-            student_user_dir: student user directory that contains list of all courses containing student username
         """
-        # get allowed grader and coutse config
-        allowed_graders, grader_course_cfg = get_allowed_graders(server_cfg, grader_user_dir)
-        allowed_students, student_course_cfg = get_allowed_students(server_cfg, student_user_dir)
-
+        # get course config and its members
+        course_list_path = Path(server_cfg['nbgrader']['course_dir'])
+        course_cfg_list = get_course_config_and_user(course_list_path)
+        
         nbgrader_cfg = get_nbgrader_cfg(server_cfg)
 
         # Add default course list to kubespawner profile
         cmds, profile_list, username = self.init_profile_list(spawner,server_cfg)
 
-        if allowed_graders:
-            grader_profile_list = self.generate_course_profile(spawner, nbgrader_cfg,
-                                             grader_course_cfg, allowed_graders,
-                                             username, cmds, role="grader")
+        if len(course_cfg_list.keys()) > 0:
+            grader_profile_list = self.generate_course_profile(spawner, 
+                                                       nbgrader_cfg,
+                                                       cmds,
+                                                       course_cfg_list,
+                                                       role="grader")
             profile_list.extend(grader_profile_list)
 
-        if allowed_students:
-            student_profile_list = self.generate_course_profile(spawner, nbgrader_cfg,
-                                             student_course_cfg, allowed_students,
-                                             username, cmds, role="student")
+            student_profile_list = self.generate_course_profile(spawner, 
+                                                       nbgrader_cfg,
+                                                       cmds,
+                                                       course_cfg_list,
+                                                       role="student")
             profile_list.extend(student_profile_list)
 
-        return profile_list
-
-    def configure_pre_spawn_hook(self,spawner,
-                                 server_cfg,
-                                 grader_user_dir,
-                                 student_user_dir):
+        return profile_list    
+                    
+    def configure_pre_spawn_hook(self,spawner,server_cfg,):
         """
         Configure pre spawner hook, and update the spawner.
         Home directories for exam users will be separated by semster_id, and course_id
@@ -908,13 +911,11 @@ class E2xHub(LoggingConfigurable):
         args:
             spawner: kubespawner object
             server_cfg: server configuration
-            grader_user_dir: grader user directory that contains list of all courses containing grader username
-            student_user_dir: student user directory that contains list of all courses containing student username
         """
 
-        # get allowed grader and coutse config
-        allowed_graders, grader_course_cfg = get_allowed_graders(server_cfg, grader_user_dir)
-        allowed_students, student_course_cfg = get_allowed_students(server_cfg, student_user_dir)
+        # get course config and its members
+        course_list_path = Path(server_cfg['nbgrader']['course_dir'])
+        course_cfg_list = get_course_config_and_user(course_list_path)
 
         username = str(spawner.user.name)
         selected_profile = spawner.user_options['profile']
@@ -922,7 +923,7 @@ class E2xHub(LoggingConfigurable):
 
         # clear spawner attributes as Python spawner objects are peristent
         # if not cleared, they may be persistent across restarts, and 
-        # result in duplicate mounts, thus failed to start
+        # result in duplicate mounts resulting in failed startup
         spawner.volume_mounts = []
 
         # check server mode
@@ -931,36 +932,28 @@ class E2xHub(LoggingConfigurable):
 
         is_grader = "grader" in selected_profile
         # set grader volume mounts
-        if is_grader and check_consecutive_keys(server_cfg, "nbgrader", "formgrader", "enabled") and \
-                check_consecutive_keys(server_cfg, "nbgrader", "formgrader", "grader_course_cfg"):
+        if is_grader and check_consecutive_keys(server_cfg, "nbgrader", "enabled"):
             is_grader = self.configure_grader_volumes(spawner,
-                                                      grader_course_cfg,
-                                                      selected_profile,
-                                                      username,
-                                                      grader_user_dir,
-                                                      server_mode,
-                                                      )
+                                course_cfg_list=course_cfg_list,
+                                server_mode="teaching",
+                                )
         spawner.log.debug("Grader status for user %s is %s", username, is_grader)
 
         # set student volume mounts
-        if check_consecutive_keys(server_cfg, "nbgrader", "student_course_cfg") and \
-                not is_grader and selected_profile != "Default":
-            self.configure_student_volumes(spawner,
-                                           student_course_cfg,
-                                           selected_profile, 
-                                           username,
-                                           student_user_dir,
-                                           server_mode) 
-        # set additional course and extra volume mounts
-        if selected_profile != "Default":
-            # set extra course volume mounts
-            read_only = False if is_grader else True
-            self.configure_extra_course_volumes(spawner,
-                                                selected_profile, 
-                                                read_only=read_only)
+        if not is_grader and selected_profile != "Default":
+            self.configure_student_volumes(spawner, 
+                                  course_cfg_list,
+                                  server_mode="exam")
+#         # set additional course and extra volume mounts
+#         if selected_profile != "Default":
+#             # set extra course volume mounts
+#             read_only = False if is_grader else True
+#             self.configure_extra_course_volumes(spawner,
+#                                                 selected_profile, 
+#                                                 read_only=read_only)
 
-            # set extra volume mounts
-            if check_consecutive_keys(server_cfg, "extra_mounts", "enabled"):
-                if server_cfg["extra_mounts"]["enabled"]:
-                    vol_mounts = server_cfg["extra_mounts"]
-                    self.configure_extra_volumes(spawner, vol_mounts, read_only)
+#             # set extra volume mounts
+#             if check_consecutive_keys(server_cfg, "extra_mounts", "enabled"):
+#                 if server_cfg["extra_mounts"]["enabled"]:
+#                     vol_mounts = server_cfg["extra_mounts"]
+#                     self.configure_extra_volumes(spawner, vol_mounts, read_only)
