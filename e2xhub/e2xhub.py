@@ -1,6 +1,6 @@
 import os
 from pathlib import Path
-#from utils import *
+# from utils import *
 import pandas as pd
 from traitlets import Unicode
 from traitlets.config import LoggingConfigurable
@@ -188,8 +188,167 @@ class E2xHub(LoggingConfigurable):
             parsed_cfgs.append(joint_am)
 
         return parsed_cfgs
+    
+    def create_course_profile(self, 
+                      spawner,
+                      course_name,
+                      role="student"):
+        """
+        Parse course profile to Kubespawner format
+        args:
+            spawner: spawner
+            course_name: name of the course 
+            role: role of the user e.g. student, grader. This will reflect the course slug
+        """
+        # Default node affinity is user. Make sure you have 
+        # at least one node labelled: hub.jupyter.org/node-purpose=user
+        node_affinity = dict(
+            matchExpressions=[
+                dict(
+                    key="hub.jupyter.org/node-purpose",
+                    operator="In",
+                    values=["core"] if role=="grader" else ["user"],
+                )
+            ],
+        )
 
-    def parse_profile(self, spawner, course_cfg, course_id, 
+        # course slug  must be unique for different role 
+        # here we use {course_name}+{role} as slug
+        # which also correspods to the key in the course config
+        # e.g. MRC-Teaching+grader
+        course_slug = f"{course_name}+{role}"
+        
+        # default course display name
+        course_display_name = f"{course_name} ({role})"
+        
+        # if grader, set color to blue to make it distinct with stud color
+        if role == "grader":
+            course_display_name = f"<span style=\"color:blue;\">{course_display_name}</span>"
+        spawner.log.debug(course_display_name)
+
+        # parse profile
+        parsed_course_profile = {
+                'display_name': f'{course_display_name}',
+                'slug': f'{course_slug}',
+                #'description': course_description,
+                'profile_options': {
+                     'course_id_slug': {
+                         'display_name': 'Semester',
+                         'choices': {},
+                     },
+                },
+                'kubespawner_override': {
+                    'node_affinity_required': [node_affinity]
+                }
+            } 
+        
+        return parsed_course_profile
+
+    def create_semester_profile(self, 
+                      spawner,
+                      course_cfg,
+                      course_name,
+                      course_id, 
+                      cmds,
+                      role="student"):
+        """
+        Create a choice for each course id (each semester)
+        args:
+            spawner: spawner
+            course_cfg: configuration of the given course id
+            course_profile: course profile
+            course_id: course_id where the config is applied to
+            post_start_cmds: spawner post start commands
+            cmds: spawner pre stop commands
+            role: role of the user e.g. student, grader. This will reflect the course slug
+        """
+        
+        # set image resources to default
+        image = course_cfg.get("image", spawner.image)
+        image_pull_policy = course_cfg.get("pullPolicy", spawner.image_pull_policy)
+        
+        profile_resources = course_cfg.get("resources", {})
+        cpu_guarantee = profile_resources.get("cpu_guarantee",spawner.cpu_guarantee)
+        cpu_limit = profile_resources.get("cpu_limit", spawner.cpu_limit)
+        mem_guarantee = profile_resources.get("mem_guarantee", 
+                                              "{:.1f}G".format(spawner.mem_guarantee/1000000000))
+        mem_limit = profile_resources.get("mem_limit",
+                                          "{:.1f}G".format(spawner.mem_limit/1000000000))                
+
+        # schedule user by default to nodes that have label "user"
+        node_info = "user"
+#         node_affinity = profile_resources.get(node_affinity,")
+#         if "node_affinity" in profile_resources:
+#             node_affinity = profile_resources["node_affinity"]
+#             node_info = ""
+#             nodes = []
+#             for na in node_affinity["matchExpressions"]:
+#                 nodes.extend(na["values"])
+#             node_info = "/".join(nodes)
+#             spawner.log.debug(f"Overriding node affinity, flavor {node_info}.")
+
+        # Extra profile description
+        extra_description = "<br>" 
+        if 'extra_profile_description' in course_cfg:
+            for description in course_cfg['extra_profile_description']:
+                extra_description += description+"<br>" 
+
+        # Description to show in each profile    
+        course_description = f"resource: {cpu_limit}vCPUs {mem_limit} RAM," + \
+                             f"nodes: {node_info} <br> image: {image}," + \
+                             f"pullPolicy: {image_pull_policy} {extra_description}"
+        spawner.log.debug(course_description)
+
+        # course slug  must be unique for different role 
+        # here we use {course_name}+{role}+{course_id} as slug
+        # which also correspods to the key in the course config
+        # e.g. MRC-Teaching+grader+MRC-Teaching-SS23
+        # override course_name and course_id if given in its course config
+        course_name = course_cfg.get("course_name", course_name)
+        course_id = course_cfg.get("course_id", course_id)
+        course_id_slug = f"{course_name}+{role}+{course_id}"
+        
+        # override course display name if given in course config
+        choice_display_name = course_cfg.get("choice_display_name", course_id)
+        spawner.log.debug(choice_display_name)
+
+        # parse profile
+        parsed_profile = {f'{course_id_slug}':
+            {
+                'display_name': f'{choice_display_name}',
+                'description': course_description,
+                'kubespawner_override': {
+                    'cpu_limit': cpu_limit,
+                    'cpu_guarantee': cpu_guarantee,
+                    'mem_limit': '{}'.format(mem_limit),
+                    'mem_guarantee': '{}'.format(mem_guarantee),
+                    'image': image,
+                    'image_pull_policy': image_pull_policy,
+                    'lifecycle_hooks': {
+                            "postStart": {
+                                "exec": {
+                                    "command": ["/bin/sh", "-c", " && ".join(cmds)]
+                                }
+                            },
+                            # todo: is this needed?
+                            "preStop": {
+                                "exec": {
+                                    "command": ["/bin/sh", "-c", "rm -rf /tmp/*"]
+                                }
+                            }
+                    },
+                    #'node_affinity_required': [node_affinity]
+                }
+            } 
+        }
+
+        return parsed_profile
+    
+    def parse_profile(self, 
+                      spawner,
+                      course_cfg,
+                      course_name,
+                      course_id, 
                       cmds, role="student"):
         """
         Parse course profile to Kubespawner format
@@ -202,29 +361,16 @@ class E2xHub(LoggingConfigurable):
             role: role of the user e.g. student, grader. This will reflect the course slug
         """
         # set image resources to default
-        image = spawner.image 
-        image_pull_policy = spawner.image_pull_policy
-        cpu_limit = spawner.cpu_limit
-        cpu_guarantee = spawner.cpu_guarantee
-        mem_limit = "{:.1f}G".format(spawner.mem_limit/1000000000)
-        mem_guarantee = "{:.1f}G".format(spawner.mem_guarantee/1000000000)
-
-        if "image" in course_cfg:
-            image = course_cfg["image"]
-        if "pullPolicy" in course_cfg:
-            image_pull_policy = course_cfg["pullPolicy"]
-
-        profile_resources = {}
-        if "resources" in course_cfg:
-            profile_resources = course_cfg["resources"]
-            if "cpu_guarantee" in profile_resources:
-                cpu_guarantee = profile_resources["cpu_guarantee"]
-            if "mem_guarantee" in profile_resources:
-                mem_guarantee = profile_resources["mem_guarantee"]
-            if "cpu_limit" in profile_resources:
-                cpu_limit = profile_resources["cpu_limit"]
-            if "mem_limit" in profile_resources:
-                mem_limit = profile_resources["mem_limit"]
+        image = course_cfg.get("image", spawner.image)
+        image_pull_policy = course_cfg.get("pullPolicy", spawner.image_pull_policy)
+        
+        profile_resources = course_cfg.get("resources", {})
+        cpu_guarantee = profile_resources.get("cpu_guarantee",spawner.cpu_guarantee)
+        cpu_limit = profile_resources.get("cpu_limit", spawner.cpu_limit)
+        mem_guarantee = profile_resources.get("mem_guarantee", 
+                                              "{:.1f}G".format(spawner.mem_guarantee/1000000000))
+        mem_limit = profile_resources.get("mem_limit",
+                                          "{:.1f}G".format(spawner.mem_limit/1000000000))                
 
         # Default node affinity is user. Make sure you have 
         # at least one node labelled: hub.jupyter.org/node-purpose=user
@@ -256,18 +402,30 @@ class E2xHub(LoggingConfigurable):
                 extra_description += description+"<br>" 
 
         # Description to show in each profile    
-        course_description = f"resource: {cpu_limit}vCPUs {mem_limit} RAM, nodes: {node_info} <br> image: {image}, \
-                              pullPolicy: {image_pull_policy} {extra_description}"
+        course_description = f"resource: {cpu_limit}vCPUs {mem_limit} RAM," + \
+                             f"nodes: {node_info} <br> image: {image}," + \
+                             f"pullPolicy: {image_pull_policy} {extra_description}"
         spawner.log.debug(course_description)
 
-        # course slug  must be unique for different role
-        course_slug = course_id + f"--{role}" 
+        # course slug  must be unique for different role 
+        # here we use {course_name}+{role}+{course_id} as slug
+        # which also correspods to the key in the course config
+        # e.g. MRC-Teaching+grader+MRC-Teaching-SS23
+        # override course_name and course_id if given in its course config
+        course_name = course_cfg.get("course_name", course_name)
+        course_id = course_cfg.get("course_id", course_id)
+        course_slug = f"{course_name}+{role}+{course_id}"
+        
+        # override course display name if given in course config
+        display_name = course_cfg.get("display_name", course_id)
+        display_name = f"{display_name} ({role})"
+        spawner.log.debug(display_name)
 
         # parse profile
         parsed_profile = [
             {
-                'display_name': f"{course_id} ({role})",
-                'slug': '{}'.format(course_slug),
+                'display_name': f'{display_name}',
+                'slug': f'{course_slug}',
                 'description': course_description,
                 'kubespawner_override': {
                     'cpu_limit': cpu_limit,
@@ -282,6 +440,7 @@ class E2xHub(LoggingConfigurable):
                                     "command": ["/bin/sh", "-c", " && ".join(cmds)]
                                 }
                             },
+                            # todo: is this needed?
                             "preStop": {
                                 "exec": {
                                     "command": ["/bin/sh", "-c", "rm -rf /tmp/*"]
@@ -306,9 +465,6 @@ class E2xHub(LoggingConfigurable):
 
         # Default nbgrader commands
         cmds = []
-        #cmds.append(f"echo 'import os'  >> {self.nbgrader_config_path}")
-        #cmds.append(f"echo 'c = get_config()'  >> {self.nbgrader_config_path}")
-
         profile_list = []
 
         # Add commands to spawner (applied to all hub users)
@@ -354,16 +510,19 @@ class E2xHub(LoggingConfigurable):
             } 
         ])
 
+        # Todo: is extra prfile still relevant since profile now is based on courses
         # Extra profile list
-        if check_consecutive_keys(server_cfg, "extra_profile_list", "enabled"):
-            if server_cfg["extra_profile_list"]["enabled"]:
-                if check_consecutive_keys(server_cfg, "extra_profile_list", "profiles"):
-                    extra_profile_list = server_cfg['extra_profile_list']['profiles']
-                    for profile in extra_profile_list.keys():
-                        parsed_profile = self.parse_profile(spawner, extra_profile_list, 
-                                                       profile, cmds, 
-                                                       role="student")
-                        profile_list.extend(parsed_profile)
+#         if check_consecutive_keys(server_cfg, "extra_profile_list", "enabled"):
+#             if server_cfg["extra_profile_list"]["enabled"]:
+#                 if check_consecutive_keys(server_cfg, "extra_profile_list", "profiles"):
+#                     extra_profile_list = server_cfg['extra_profile_list']['profiles']
+#                     for profile in extra_profile_list.keys():
+#                         parsed_profile = self.parse_profile(spawner, 
+#                                                             extra_profile_list, 
+#                                                             profile,
+#                                                             cmds, 
+#                                                             role="student")
+#                         profile_list.extend(parsed_profile)
 
 
         return cmds, profile_list, username
@@ -468,24 +627,26 @@ class E2xHub(LoggingConfigurable):
             cmds: commands executed when the server starts spawning
             role: role of the current user e.g. student or grader
         """
+        # keep track of commands for each course
         sum_cmds = 0
         profile_list = []
+        # if no course config, return empty profile
+        if not course_cfg_list:
+            spawner.log.warning(f"Course config is empty, returning empty profile")
+            return profile_list
+        
         for course_name in course_cfg_list.keys():
-            for course_id in course_cfg_list[course_name][role].keys():
+            if role not in course_cfg_list[course_name]:
+                spawner.log.warning(f"Course {course_name} does not have config for role {role}")
+                continue
+                
+            for course_id in course_cfg_list[course_name][role].keys():                    
                 course_members = course_cfg_list[course_name][role][course_id]['course_members']
                 if spawner.user.name in course_members:
-                    # set course id, that is the combination of course name and smt id
-                    #course_id = course_name + "-" + semester_id
-                    # ToDo: make this path as argument
                     course_id_path = f"/home/{spawner.user.name}/courses/{course_name}/{course_id}"
 
                     # Add configuration for each course
-                    course_config_path = course_cfg_list[course_name][role][course_id]['course_config_path']
-                    curr_course_cfg = load_yaml(course_config_path)
-                    if curr_course_cfg is None:
-                        spawner.log.warning("No course config found")
-                        curr_course_cfg = {}
-                        
+                    curr_course_cfg = course_cfg_list[course_name][role][course_id]['course_config']                        
                     cmds, sum_cmds = self.configure_nbgrader(spawner, nbgrader_cfg, 
                                                         curr_course_cfg, course_id,
                                                         course_id_path, cmds, sum_cmds,
@@ -503,9 +664,8 @@ class E2xHub(LoggingConfigurable):
                     # update post start commands
                     post_start_cmds = ["/bin/sh", "-c", " && ".join(cmds)]
 
-                    parsed_profile = self.parse_profile(spawner, curr_course_cfg, 
-                                                   course_id, cmds, 
-                                                   role=role)
+                    parsed_profile = self.parse_profile(spawner, curr_course_cfg, course_name,
+                                                        course_id, cmds, role=role)
                     profile_list.extend(parsed_profile)
 
                     # Clear commands for the current course
@@ -513,6 +673,85 @@ class E2xHub(LoggingConfigurable):
                     sum_cmds = 0
 
         return profile_list
+
+    
+    def generate_course_profile_new(self, spawner,
+                                nbgrader_cfg,
+                                cmds,
+                                course_cfg_list,
+                                role="student"):
+        """
+        Generate course profile from the given course list and config
+        args:
+            spawner: kubespawner object
+            nbgrader_cfg: global and default nbgrader config, this is overrided by the course-specific
+            nbgrader config
+            course_cfg_list: course configuration containing course list with its configs
+            cmds: commands executed when the server starts spawning
+            role: role of the current user e.g. student or grader
+        """
+        # keep track of commands for each course
+        sum_cmds = 0
+        profile_list = []
+        # if no course config, return empty profile
+        if not course_cfg_list:
+            spawner.log.warning(f"Course config is empty, returning empty profile")
+            return profile_list
+        
+        for course_name in course_cfg_list.keys():
+            if role not in course_cfg_list[course_name]:
+                spawner.log.warning(f"Course {course_name} does not have config for role {role}")
+                continue
+            
+            course_profile = self.create_course_profile(spawner, course_name, role)
+            #course_semester_choices = {}
+            
+            # course_profile['profile_options']['course_id']['choices'] = {}
+            is_user_course_member = False
+            for course_id in course_cfg_list[course_name][role].keys():                    
+                course_members = course_cfg_list[course_name][role][course_id]['course_members']
+                if spawner.user.name in course_members:
+                    course_id_path = f"/home/{spawner.user.name}/courses/{course_name}/{course_id}"
+
+                    # Add configuration for each course
+                    curr_course_cfg = course_cfg_list[course_name][role][course_id]['course_config']                        
+                    cmds, sum_cmds = self.configure_nbgrader(spawner, nbgrader_cfg, 
+                                                        curr_course_cfg, course_id,
+                                                        course_id_path, cmds, sum_cmds,
+                                                        student=False if role=="grader" else True)
+
+                    # course specific commands e.g. enable exam mode for specific course
+                    if 'course_cmds' in curr_course_cfg:
+                        spawner.log.info("[course cmds] looking into course commands")
+                        course_commands = curr_course_cfg['course_cmds']
+                        for course_cmd in course_commands:
+                            spawner.log.info("[course cmds] executing: %s", course_cmd)
+                            cmds.append("{}".format(course_cmd))               
+                            sum_cmds += 1
+
+                    # update post start commands
+                    post_start_cmds = ["/bin/sh", "-c", " && ".join(cmds)]
+
+                    parsed_semester_profile = self.create_semester_profile(spawner, curr_course_cfg, course_name,
+                                                        course_id, cmds, role=role)
+                    
+                    # override course display name if given in each course id
+                    if "course_display_name" in curr_course_cfg:
+                        course_profile['display_name'] = curr_course_cfg["course_display_name"]
+                        
+                    course_profile['profile_options']['course_id_slug']['choices'].update(parsed_semester_profile)
+                    
+                    # Clear commands for the current course
+                    del cmds[-sum_cmds:]
+                    sum_cmds = 0
+                    is_user_course_member = True                 
+                            
+            # only show profile to members
+            if is_user_course_member:
+                profile_list.append(course_profile)
+
+        return profile_list    
+    
     
     def configure_grader_volumes(self, spawner,
                                  course_cfg_list,
@@ -527,28 +766,16 @@ class E2xHub(LoggingConfigurable):
           home directory location on the nfs server. It's useful when the exam and
           teaching servers are deployed on the same hub.
         """
-        is_grader = False
-        selected_profile = spawner.user_options['profile']
-        
-        course_id = selected_profile.split("--")[0]
+        selected_profile = spawner.user_options['course_id_slug']        
+        course_name, role, course_id = selected_profile.split("+")
         username = spawner.user.name
-
-        # course name and semester id
-        print("Course id: ",course_id)
-        course_name, course_mode, smt_id = course_id.split("-")
-        course_name = f"{course_name}-{course_mode}"
         
         course_members = course_cfg_list[course_name]['grader'][course_id]['course_members']
         
-
         # mount home dir and the selected course dir if the user is grader
         if username in course_members and course_id != "Default":
             # Load grader course config if given
-            course_config_path = course_cfg_list[course_name]['grader'][course_id]['course_config_path']
-            grader_course_cfg = load_yaml(course_config_path)
-            if grader_course_cfg is None:
-                spawner.log.warning("No grader course config found")
-                grader_course_cfg = {}
+            grader_course_cfg = course_cfg_list[course_name]['grader'][course_id]['course_config']
             
             # home volume subpath for grader
             home_volume_mountpath = f'/home/{username}'
@@ -613,16 +840,12 @@ class E2xHub(LoggingConfigurable):
                 if self.exchange_volume_name:
                     spawner.volume_mounts.append(exchange_volume_mount)
 
-            is_grader = True
-
             # set grader environment e.g. uid and gid
             spawner.log.debug("Changing uid and gid for grader: %s to %s %s", 
                                username, self.grader_uid, self.grader_gid)
             spawner.environment = {'NB_USER':username,
                                    'NB_UID':f'{self.grader_uid}',
                                    'NB_GID':f'{self.grader_uid}'}
-
-        return is_grader
     
     # set students volume mount
     def configure_student_volumes(self, spawner, 
@@ -640,27 +863,15 @@ class E2xHub(LoggingConfigurable):
           uid: Linux user id of the user, this is also used as the dir uid created by the user
           gid: Linux group id of the user, this is also used as the dir gid created by the user
         """
-        # currently the course slug for student is e.g. WuS-SS22--student (course_name-semester_id-role)
-        # to differentiate between grader's and student's course slug
-        selected_profile = spawner.user_options['profile']
-        
-        course_id = selected_profile.split("--")[0]
+        selected_profile = spawner.user_options['course_id_slug']
+        course_name, role, course_id = selected_profile.split("+")
         username = spawner.user.name
-
-        # course name and semester id
-        print("Course id: ",course_id)
-        course_name, course_mode, smt_id = course_id.split("-")
-        course_name = f"{course_name}-{course_mode}"
         
         course_members = course_cfg_list[course_name]['student'][course_id]['course_members']
 
         if username in course_members:
             # Load grader course config if given
-            course_config_path = course_cfg_list[course_name]['student'][course_id]['course_config_path']
-            student_course_cfg = load_yaml(course_config_path)
-            if student_course_cfg is None:
-                spawner.log.warning("No studnent course config found")
-                student_course_cfg = {}
+            student_course_cfg = course_cfg_list[course_name]['student'][course_id]['course_config']
             
             home_volume_mountpath = f'/home/{username}'
             home_volume_subpath = os.path.join(self.home_volume_subpath,
@@ -682,16 +893,8 @@ class E2xHub(LoggingConfigurable):
                 # Only web-based exchange supported 
                 spawner.log.info("[student][exchange] Using given exchange service (Note only web-based exchange supported)")
             else:
-                spawner.log.debug("[student][exchange] using default exchange directory")
-                # ToDo: make user_list_root as an argument
-                #course_id_member_file = os.path.join(student_user_dir, course_id+".csv")
-                #if os.path.isfile(course_id_member_file):
-                #    db_file_pd = pd.read_csv(course_id_member_file)
-                #    user_list = list(db_file_pd.Username.apply(str))
-
-                #if username in user_list:
-                
-                spawner.log.info("[pre spawn hook] found course %s for %s", course_id, username)
+                spawner.log.debug("[student][exchange] using default exchange directory")                
+                spawner.log.debug("[pre spawn hook] found course %s for %s", course_id, username)
                 # check whether personalized inbound or outbound enabled
                 personalized_outbound = False
                 if "personalized_outbound" in student_course_cfg:
@@ -795,11 +998,7 @@ class E2xHub(LoggingConfigurable):
                 else:
                     spawner.log.warning("Student exchange volume name is: %s",self.exchange_volume_name,
                                         "consult k8s admin to provide the volume for exchange")
-                #else:
-                #    spawner.log.warning("Course file not found: %s",course_id_member_file)
 
-
-            # set student uid=1000, gid=1000. This translates student user to jovyan user
             spawner.log.debug("UID and GID for %s is changed to %s",
                               username, spawner.environment)
             spawner.environment = {'NB_USER':username,
@@ -827,12 +1026,9 @@ class E2xHub(LoggingConfigurable):
                                                      read_only=read_only)
 
         # course specific shared files / dirs within the selected course
-        selected_profile = spawner.user_options['profile']
-        course_id = selected_profile.split("--")[0]
-
-        # course name and semester id
-        course_name, course_mode, smt_id = course_id.split("-")
-        course_name = f"{course_name}-{course_mode}"
+        selected_profile = spawner.user_options['course_id_slug']
+        course_name, role, course_id = selected_profile.split("+")
+        username = spawner.user.name        
         
         private_volume_mountpath = f"{self.extra_volume_mountpath}/{course_name}"
         private_volume_subpath = os.path.join(self.share_volume_subpath, 
@@ -887,14 +1083,14 @@ class E2xHub(LoggingConfigurable):
         cmds, profile_list, username = self.init_profile_list(spawner,server_cfg)
 
         if len(course_cfg_list.keys()) > 0:
-            grader_profile_list = self.generate_course_profile(spawner, 
+            grader_profile_list = self.generate_course_profile_new(spawner, 
                                                        nbgrader_cfg,
                                                        cmds,
                                                        course_cfg_list,
                                                        role="grader")
             profile_list.extend(grader_profile_list)
 
-            student_profile_list = self.generate_course_profile(spawner, 
+            student_profile_list = self.generate_course_profile_new(spawner, 
                                                        nbgrader_cfg,
                                                        cmds,
                                                        course_cfg_list,
@@ -918,8 +1114,11 @@ class E2xHub(LoggingConfigurable):
         course_cfg_list = get_course_config_and_user(course_list_path)
 
         username = str(spawner.user.name)
-        selected_profile = spawner.user_options['profile']
+        selected_profile = spawner.user_options['course_id_slug']
         spawner.log.info("Selected profile %s", selected_profile)
+        
+        print("=============================")
+        print(spawner.user_options)
 
         # clear spawner attributes as Python spawner objects are peristent
         # if not cleared, they may be persistent across restarts, and 
@@ -930,13 +1129,13 @@ class E2xHub(LoggingConfigurable):
         server_mode = server_cfg.get('mode', 'teaching')
         spawner.log.debug("Server mode: %s", server_mode)
 
-        is_grader = "grader" in selected_profile
+        is_grader = True if "grader" in selected_profile else False
         # set grader volume mounts
         if is_grader and check_consecutive_keys(server_cfg, "nbgrader", "enabled"):
-            is_grader = self.configure_grader_volumes(spawner,
-                                course_cfg_list=course_cfg_list,
-                                server_mode="teaching",
-                                )
+            self.configure_grader_volumes(spawner,
+                                          course_cfg_list=course_cfg_list,
+                                          server_mode="teaching",
+                                          )
         spawner.log.debug("Grader status for user %s is %s", username, is_grader)
 
         # set student volume mounts
@@ -944,6 +1143,7 @@ class E2xHub(LoggingConfigurable):
             self.configure_student_volumes(spawner, 
                                   course_cfg_list,
                                   server_mode="exam")
+            
         # set additional course and extra volume mounts
         if selected_profile != "Default":
             # set extra course volume mounts
