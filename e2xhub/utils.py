@@ -156,6 +156,8 @@ def add_allowed_users(c, users):
 def get_course_config_and_user(course_list_path):
     """
     Get course config and user list
+    args:
+        course_list_path: path to the course directory
     """
     
     course_directories = [item for item in course_list_path.iterdir() 
@@ -181,25 +183,27 @@ def get_course_config_and_user(course_list_path):
                               if item.is_file() and not item.name.startswith('.')
                               and "csv" in item.name.lower()]
 
-            if not config_list_path:  
-                #course_cfg[course_path.name][role_path.name]['config_list_path'] = config_list_path
-                continue
+            if config_list_path:
+                # get users for each course from each semester, the name of user list file
+                # should represent the name of the course id for each semester
+                course_cfg_and_user[course_path.name][role_path.name] = {}
+                for cl in config_list_path:
+                    course_cfg_and_user[course_path.name][role_path.name][cl.stem] = {}
+                    # course config path
+                    course_cfg_and_user[course_path.name][role_path.name][cl.stem]['course_config_path'] = cl
 
-            if not user_list_path:
-                continue
-                #course_cfg[course_path.name][role_path.name]['user_list_path'] = user_list_path
-            
-            # get users for each course from each semester, the name of user list file
-            # should represent the name of the course id for each semester
-            course_cfg_and_user[course_path.name][role_path.name] = {}
-            for ul in user_list_path:
-                user_list = list(pd.read_csv(ul).Username.str.strip())
-                course_cfg_and_user[course_path.name][role_path.name][ul.stem] = {}
-                course_cfg_and_user[course_path.name][role_path.name][ul.stem]['course_members'] = user_list
-                course_cfg_and_user[course_path.name][role_path.name][ul.stem]['course_members_path'] = ul
-                
-                # course config path
-                course_config_path = [ccpath for ccpath in config_list_path if ul.stem in ccpath.stem][0]
-                course_cfg_and_user[course_path.name][role_path.name][ul.stem]['course_config_path'] = course_config_path
-                    
+                    # load config once, to speed up the spawner if later the cfg is needed
+                    course_config = load_yaml(cl)
+                    if course_config is None:
+                        course_config = {}
+                    course_cfg_and_user[course_path.name][role_path.name][cl.stem]['course_config'] = course_config
+
+                    user_path = [ccpath for ccpath in user_list_path if cl.stem in ccpath.stem]
+                    user_list = []
+                    if user_path:
+                        user_list = list(pd.read_csv(user_path[0]).Username.str.strip())
+
+                    course_cfg_and_user[course_path.name][role_path.name][cl.stem]['course_members'] = user_list
+                    course_cfg_and_user[course_path.name][role_path.name][cl.stem]['course_members_path'] = user_path
+
     return course_cfg_and_user
