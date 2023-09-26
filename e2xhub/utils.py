@@ -1,5 +1,6 @@
 import os
 import yaml
+from pathlib import Path
 import pandas as pd
 
 
@@ -76,6 +77,32 @@ def get_allowed_students(server_cfg, student_user_dir):
         allowed_students = get_allowed_users(student_user_dir, student_course_cfg)
         
     return allowed_students, student_course_cfg
+
+def get_jupyterhub_users(server_cfg):
+    """
+    Get JupyterHub users (allowed_users, blocked_users, and admin_users)
+    args:
+        server_cfg: server configuration
+    """
+    jupyterhub_users = {'allowed_users': [],
+                        'blocked_users': [],
+                        'admin_users': []}
+    if "user_list_path" not in server_cfg:
+        return jupyterhub_users
+        
+    user_list_path = Path(server_cfg["user_list_path"])
+    user_list_file_path = [item for item in user_list_path.iterdir() 
+                           if item.is_file() and not item.name.startswith('.')
+                           and ".csv" in item.name.lower()]
+    for user_file_path in user_list_file_path:
+        if "admin" in user_file_path.name.lower():
+            jupyterhub_users['admin_users'].extend(list(pd.read_csv(user_file_path).Username.str.strip()))
+        elif "allowed_users" in user_file_path.name.lower():
+            jupyterhub_users['allowed_users'].extend(list(pd.read_csv(user_file_path).Username.str.strip()))
+        elif "blocked_users" in user_file_path.name.lower():
+            jupyterhub_users['blocked_users'].extend(list(pd.read_csv(user_file_path).Username.str.strip()))
+    
+    return jupyterhub_users
                     
 def check_consecutive_keys(config, *argv):
     """
@@ -151,19 +178,25 @@ def add_allowed_users(c, users):
         c: JupyterHub config
         users: users to be added to JupyterHub
     """
-    c.Authenticator.allowed_users |= set(users)
+    c.Authenticator.allowed_users |= users
     
-def get_course_config_and_user(course_list_path):
+def get_course_config_and_user(server_cfg):
     """
     Get course config and user list
     args:
         course_list_path: path to the course directory
     """
     
+    course_cfg_and_user = {}
+    if check_consecutive_keys(server_cfg, "nbgrader", "course_dir"):
+        course_list_path = Path(server_cfg['nbgrader']['course_dir'])
+    else:
+        return course_cfg_and_user
+    
     course_directories = [item for item in course_list_path.iterdir() 
                           if item.is_dir() and not item.name.startswith('.')]
 
-    course_cfg_and_user = {}
+    
     for course_path in course_directories:
         # loop through grader and student list
         role_directories = [item for item in course_path.iterdir() 
