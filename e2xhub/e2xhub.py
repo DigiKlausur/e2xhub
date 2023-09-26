@@ -116,7 +116,50 @@ class E2xHub(LoggingConfigurable):
         Extra volume mount path
         """,
     ).tag(config=True)
+    
+    course_cfg_volume_mountpath = Unicode(
+        '/srv/disk-01/jupyterhub/nbgrader/courses',
+        help="""
+        Config volume mount path for the course grader
+        """,
+    ).tag(config=True)
+    course_cfg_volume_name = Unicode(
+        'disk1',
+        help="""
+        Course config volume name on the nfs client
+        """,
+    ).tag(config=True)
 
+    course_cfg_volume_subpath = Unicode(
+        'jupyterhub/nbgrader/courses',
+        help="""
+        Course config volume subpath for graders on the nfs server 
+        they share the same path
+        """,
+    ).tag(config=True)
+
+    config_volume_mountpath = Unicode(
+        '/srv/disk-01/jupyterhub',
+        help="""
+        Config volume mount path for admins
+        """,
+    ).tag(config=True)
+
+    config_volume_name = Unicode(
+        'disk1',
+        help="""
+        Course config volume name on the nfs client
+        """,
+    ).tag(config=True)
+
+    config_volume_subpath = Unicode(
+        'jupyterhub',
+        help="""
+        Config volume subpath for admins on the nfs server 
+        they share the same path
+        """,
+    ).tag(config=True)
+    
     student_uid = Unicode(
         '1000',
         help="""
@@ -573,18 +616,21 @@ class E2xHub(LoggingConfigurable):
     
     
     def configure_grader_volumes(self, spawner,
+                                 server_cfg,
                                  course_cfg_list,
-                                 server_mode="teaching",
+                                 admin_user=False
                                  ):
         """
         Configure grader volumes
         args:
           spawner: spawner object
-          selected_profile: selected course by the user
-          server_mode: whether teaching or exam mode, used to differentiate
-          home directory location on the nfs server. It's useful when the exam and
-          teaching servers are deployed on the same hub.
+          server_cfg: server configuration
+          course_cfg_list: course config
+          admin_user: whether current user is admin or not
         """
+        # check server mode (exam|teaching) otherwise set to teaching
+        server_mode = server_cfg.get("mode", "teaching")
+        
         selected_profile = spawner.user_options['course_id_slug']        
         course_name, role, course_id = selected_profile.split("+")
         username = spawner.user.name
@@ -625,10 +671,8 @@ class E2xHub(LoggingConfigurable):
             if self.course_volume_name:
                 spawner.volume_mounts.append(course_volume_mount)
 
-            # set exchange volume
-            if "exchange" in grader_course_cfg:
-                spawner.log.info("[grader][exchange] using given exchange service")
-            else:
+            # configure exchange volume mount
+            if "exchange" not in grader_course_cfg:
                 exchange_volume_mountpath = os.path.join(self.nbgrader_exchange_root, course_id)
                 exchange_volume_subpath = os.path.join(self.exchange_volume_subpath,
                                                        course_name, course_id) 
@@ -641,6 +685,33 @@ class E2xHub(LoggingConfigurable):
                 spawner.log.debug("Grader exchange volume name is: %s", self.home_volume_name)
                 if self.exchange_volume_name:
                     spawner.volume_mounts.append(exchange_volume_mount)
+            else:
+                spawner.log.info("grader exchange dir is configured in the course config")
+            
+            # mount server config to admin users and if it's enabled in the server config
+            # this will allow admins to modify config in their notebooks server
+            mount_server_config = server_cfg.get("mount_server_config", False)
+            if admin_user and mount_server_config:
+                config_volume_mount = configure_volume_mount(self.config_volume_name,
+                                                             self.config_volume_mountpath,
+                                                             self.config_volume_subpath,
+                                                             read_only=False)
+                if self.config_volume_name:
+                    spawner.log.debug("Mounting config volume to admin user: %s", username)
+                    spawner.volume_mounts.append(config_volume_mount)
+            
+            # mount course config to each grader container, if the user is also admin
+            # skip this as all config has been mounted
+            mount_course_config = server_cfg["nbgrader"].get("mount_course_config", False)
+            if mount_course_config and not admin_user:
+                course_cfg_volume_mount = configure_volume_mount(self.course_cfg_volume_name,
+                                                           self.course_cfg_volume_mountpath,
+                                                           os.path.join(self.course_cfg_volume_subpath,
+                                                                        course_name),
+                                                           read_only=False)
+                if self.course_cfg_volume_name:
+                    spawner.log.debug("Mounting grader course config volume to : %s", username)
+                    spawner.volume_mounts.append(course_cfg_volume_mount)
 
             # set grader environment e.g. uid and gid
             spawner.log.debug("Changing uid and gid for grader: %s to %s %s", 
@@ -869,7 +940,7 @@ class E2xHub(LoggingConfigurable):
                                                   read_only=read_only)
             spawner.volume_mounts.append(extra_vmount)
 
-    def configure_profile_list(self, spawner,server_cfg):
+    def configure_profile_list(self, spawner, server_cfg):
         """
         Configure profile list given server configuration
         args:
@@ -877,8 +948,7 @@ class E2xHub(LoggingConfigurable):
             server_cfg: server configuration
         """
         # get course config and its members
-        course_list_path = Path(server_cfg['nbgrader']['course_dir'])
-        course_cfg_list = get_course_config_and_user(course_list_path)
+        course_cfg_list = get_course_config_and_user(server_cfg)
         
         nbgrader_cfg = get_nbgrader_cfg(server_cfg)
 
@@ -902,7 +972,7 @@ class E2xHub(LoggingConfigurable):
 
         return profile_list    
                     
-    def configure_pre_spawn_hook(self,spawner,server_cfg,):
+    def configure_pre_spawn_hook(self, c, spawner, server_cfg):
         """
         Configure pre spawner hook, and update the spawner.
         Home directories for exam users will be separated by semster_id, and course_id
@@ -911,13 +981,20 @@ class E2xHub(LoggingConfigurable):
             spawner: kubespawner object
             server_cfg: server configuration
         """
-
+        # Load JupyterHub users (not necessarily have access to coursess)
+        # any user file name containing "admin" will be grouped as admin_users
+        # allowed_users grouped to allowed_users, as well as blocked_users
+        jupyterhub_users = {'allowed_users': [],
+                            'blocked_users': [],
+                            'admin_users': []}
+        if "user_list_path" in server_cfg:
+            jupyterhub_users = get_jupyterhub_users(server_cfg)
+            
         # get course config and its members
-        course_list_path = Path(server_cfg['nbgrader']['course_dir'])
-        course_cfg_list = get_course_config_and_user(course_list_path)
+        course_cfg_list = get_course_config_and_user(server_cfg)
 
         username = str(spawner.user.name)
-        selected_profile = spawner.user_options['course_id_slug']
+        selected_profile = spawner.user_options.get("course_id_slug","Default")
         spawner.log.info("Selected profile %s", selected_profile)
 
         # clear spawner attributes as Python spawner objects are peristent
@@ -928,14 +1005,18 @@ class E2xHub(LoggingConfigurable):
         # check server mode
         server_mode = server_cfg.get('mode', 'teaching')
         spawner.log.debug("Server mode: %s", server_mode)
+        
+        admin_user = True if username in jupyterhub_users['admin_users'] else False
 
         is_grader = True if "grader" in selected_profile else False
         # set grader volume mounts
         if is_grader and check_consecutive_keys(server_cfg, "nbgrader", "enabled"):
             self.configure_grader_volumes(spawner,
+                                          server_cfg=server_cfg,
                                           course_cfg_list=course_cfg_list,
-                                          server_mode="teaching",
+                                          admin_user=admin_user,
                                           )
+                
         spawner.log.debug("Grader status for user %s is %s", username, is_grader)
 
         # set student volume mounts
@@ -955,3 +1036,4 @@ class E2xHub(LoggingConfigurable):
                 if server_cfg["extra_mounts"]["enabled"]:
                     vol_mounts = server_cfg["extra_mounts"]
                     self.configure_extra_volumes(spawner, vol_mounts, read_only)
+                    
