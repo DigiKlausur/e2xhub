@@ -45,38 +45,6 @@ def load_server_cfg(config_file, server_name):
                 return server_cfg
     return None
 
-def get_allowed_graders(server_cfg, grader_user_dir):
-    """
-    Get allowed graders given a list of courses in the server config
-    args:
-        server_cfg: server configuration
-        grader_user_dir: path to the directory where the list of graders is located
-    """
-    allowed_graders = {}
-    grader_course_cfg = []
-    if check_consecutive_keys(server_cfg, "nbgrader", 
-                            "formgrader", "grader_course_cfg"):
-
-        grader_course_cfg = server_cfg['nbgrader']['formgrader']['grader_course_cfg']
-        allowed_graders = get_allowed_users(grader_user_dir, grader_course_cfg)
-        
-    return allowed_graders, grader_course_cfg
-
-def get_allowed_students(server_cfg, student_user_dir):
-    """
-    Get allowed students given a list of courses in the server config
-    args:
-        server_cfg: server configuration
-        student_user_dir: path to the directory where the list of students is located
-    """
-    allowed_students = {}
-    student_course_cfg = {}
-    if check_consecutive_keys(server_cfg, "nbgrader", 
-                            "student_course_cfg"):
-        student_course_cfg = server_cfg['nbgrader']['student_course_cfg']
-        allowed_students = get_allowed_users(student_user_dir, student_course_cfg)
-        
-    return allowed_students, student_course_cfg
 
 def get_jupyterhub_users(server_cfg):
     """
@@ -149,34 +117,12 @@ def configure_volume_mount(volume_name,
     
     return volume_mount
 
-def get_allowed_users(path, course_list):
-    """
-    Get allowed users given course list
-    args:
-        path: a path to the course list
-        course_list: a list of the courses 
-    """
-    course_members = {}
-    for course_name in course_list:
-        course_members[course_name] = {} 
-        for semester_id in course_list[course_name]:
-            course_id = course_name + "-" + semester_id
-            course_id_member_file = os.path.join(path, course_id+".csv")
-            if os.path.isfile(course_id_member_file):
-                members = list(pd.read_csv(course_id_member_file).Username.str.strip())
-                course_members[course_name][semester_id] = members
-            else:
-                print("\x1b[6;30;43m" + "[WARNING] Course file not found: {}"
-                      .format(course_id_member_file) + "; skipping....!" + "\x1b[0m")
-    
-    return course_members
-
 def add_allowed_users(c, users):
     """
     Add users to JupyterHub allowed users
     args:
         c: JupyterHub config
-        users: users to be added to JupyterHub
+        users: set users to be added to JupyterHub
     """
     c.Authenticator.allowed_users |= users
     
@@ -184,7 +130,7 @@ def get_course_config_and_user(server_cfg):
     """
     Get course config and user list
     args:
-        course_list_path: path to the course directory
+        server_cfg: server config dict
     """
     
     course_cfg_and_user = {}
@@ -195,7 +141,6 @@ def get_course_config_and_user(server_cfg):
     
     course_directories = [item for item in course_list_path.iterdir() 
                           if item.is_dir() and not item.name.startswith('.')]
-
     
     for course_path in course_directories:
         # loop through grader and student list
