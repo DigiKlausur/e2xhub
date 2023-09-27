@@ -255,19 +255,35 @@ class E2xHub(LoggingConfigurable):
 
         return parsed_cfgs
     
-    def create_course_profile(self,spawner,course_name,role="student"):
+    def create_course_profile(self,spawner,server_cfg,course_name,role="student"):
         """
-        Parse course profile to Kubespawner format
+        Parse course profile to KubesPawner format and configure default resources
+        for all courses. This will be overrided by the course config if given
         args:
             spawner: spawner
             course_name: name of the course 
             role: role of the user e.g. student, grader. This will reflect the course slug
         """
-        # Default node affinity
-        node_affinity = dict(
-            matchExpressions=self.grader_node if role=="grader" else self.student_node,
-        )
-
+        image = server_cfg.get("image", spawner.image)
+        image_pull_policy = server_cfg.get("pullPolicy", spawner.image_pull_policy)
+        
+        if role == "grader":
+            user_resources = server_cfg.get("grader_resources", {})
+        else:
+            user_resources = server_cfg.get("resources", {})
+            
+        cpu_guarantee = user_resources.get("cpu_guarantee",spawner.cpu_guarantee)
+        cpu_limit = user_resources.get("cpu_limit", spawner.cpu_limit)
+        mem_guarantee = user_resources.get("mem_guarantee", 
+                                              "{:.1f}G".format(spawner.mem_guarantee/1000000000))
+        mem_limit = user_resources.get("mem_limit",
+                                          "{:.1f}G".format(spawner.mem_limit/1000000000))    
+        
+        # Default user node affinity
+        user_node_affinity = spawner.node_affinity_required
+        if "node_affinity" in user_resources:
+            user_node_affinity = list(user_resources["node_affinity"])
+            
         # course slug  must be unique for different role 
         # here we use {course_name}+{role} as slug
         # which also correspods to the key in the course config
@@ -294,7 +310,7 @@ class E2xHub(LoggingConfigurable):
                      },
                 },
                 'kubespawner_override': {
-                    'node_affinity_required': [node_affinity]
+                    'node_affinity_required': user_node_affinity
                 }
             } 
         
@@ -304,7 +320,8 @@ class E2xHub(LoggingConfigurable):
                       course_cfg, course_name, course_id, 
                       cmds, role="student"):
         """
-        Create a choice for each course id (each semester)
+        Create a choice for each course id (each semester) and configure the env
+        and resources
         args:
             spawner: spawner
             course_cfg: configuration of the given course id
@@ -544,6 +561,7 @@ class E2xHub(LoggingConfigurable):
         return cmds, sum_cmds
     
     def generate_course_profile(self, spawner,
+                                server_cfg,
                                 nbgrader_cfg,
                                 cmds,
                                 course_cfg_list,
@@ -571,7 +589,7 @@ class E2xHub(LoggingConfigurable):
                 spawner.log.warning(f"Course {course_name} does not have config for role {role}")
                 continue
             
-            course_profile = self.create_course_profile(spawner, course_name, role)
+            course_profile = self.create_course_profile(spawner, server_cfg, course_name, role)
             
             is_user_course_member = False
             for course_id in course_cfg_list[course_name][role].keys():                    
@@ -729,12 +747,10 @@ class E2xHub(LoggingConfigurable):
         Configure volume mounts for the student
         args:
           spawner: spawner object
-          username: username of the user
+          course_cfg_list: a dictionary containing course config
           server_mode: whether teaching or exam mode, used to differentiate
           home directory location on the nfs server. It's useful when the exam and
           teaching servers are deployed on the same hub.
-          uid: Linux user id of the user, this is also used as the dir uid created by the user
-          gid: Linux group id of the user, this is also used as the dir gid created by the user
         """
         selected_profile = spawner.user_options['course_id_slug']
         course_name, role, course_id = selected_profile.split("+")
@@ -956,14 +972,16 @@ class E2xHub(LoggingConfigurable):
         cmds, profile_list, username = self.init_profile_list(spawner,server_cfg)
 
         if len(course_cfg_list.keys()) > 0:
-            grader_profile_list = self.generate_course_profile(spawner, 
+            grader_profile_list = self.generate_course_profile(spawner,
+                                                       server_cfg,
                                                        nbgrader_cfg,
                                                        cmds,
                                                        course_cfg_list,
                                                        role="grader")
             profile_list.extend(grader_profile_list)
 
-            student_profile_list = self.generate_course_profile(spawner, 
+            student_profile_list = self.generate_course_profile(spawner,
+                                                       server_cfg,
                                                        nbgrader_cfg,
                                                        cmds,
                                                        course_cfg_list,
@@ -972,7 +990,7 @@ class E2xHub(LoggingConfigurable):
 
         return profile_list    
                     
-    def configure_pre_spawn_hook(self, c, spawner, server_cfg):
+    def configure_pre_spawn_hook(self, spawner, server_cfg):
         """
         Configure pre spawner hook, and update the spawner.
         Home directories for exam users will be separated by semster_id, and course_id
