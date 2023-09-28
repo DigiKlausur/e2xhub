@@ -260,7 +260,7 @@ class E2xHub(LoggingConfigurable):
     def create_course_profile(self, spawner, server_cfg, course_name, role="student"):
         """
         Parse course profile to KubesPawner format and configure default resources
-        for all courses. This will be overrided by the course config if given
+        for all courses. This will be overriden by the course config if given
         args:
             spawner: spawner
             course_name: name of the course
@@ -518,7 +518,7 @@ class E2xHub(LoggingConfigurable):
         Initialize nbgrader config
         args:
             spawner: kubespawner object
-            nbgrader_cfg: global and default nbgrader config, this is overrided by the course-specific
+            nbgrader_cfg: global and default nbgrader config, this is overriden by the course-specific
             nbgrader config
             course_cfg: course configuration containing course list with its configs
             course_id: course id e.g. MRC-Teaching-SS23
@@ -621,7 +621,7 @@ class E2xHub(LoggingConfigurable):
         Generate course profile from the given course list and config
         args:
             spawner: kubespawner object
-            nbgrader_cfg: global and default nbgrader config, this is overrided by the course-specific
+            nbgrader_cfg: global and default nbgrader config, this is overriden by the course-specific
             nbgrader config
             course_cfg_list: course configuration containing course list with its configs
             cmds: commands executed when the server starts spawning
@@ -785,16 +785,7 @@ class E2xHub(LoggingConfigurable):
                 )
                 else False
             )
-            print("#############################")
-            print("course cfg", course_cfg)
-            print(
-                "default_exchange: ",
-                True if "default_exchange" in nbgrader_cfg else False,
-            )
-            print(
-                "course exchange: ", True if "course_exchange" in course_cfg else False
-            )
-            print("configrued: ", exchange_configured)
+
             # configure exchange volume mount
             if exchange_configured:
                 exchange_volume_mountpath = os.path.join(
