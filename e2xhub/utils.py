@@ -45,7 +45,6 @@ def load_server_cfg(config_file, server_name):
                 return server_cfg
     return None
 
-
 def get_jupyterhub_users(server_cfg):
     """
     Get JupyterHub users (allowed_users, blocked_users, and admin_users)
@@ -119,7 +118,7 @@ def configure_volume_mount(volume_name,
 
 def add_allowed_users(c, server_cfg):
     """
-    Add users to JupyterHub allowed users
+    Add users to JupyterHub allowed users when the hub starts or restarted
     args:
         c: JupyterHub config
         users: set users to be added to JupyterHub
