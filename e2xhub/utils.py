@@ -117,14 +117,30 @@ def configure_volume_mount(volume_name,
     
     return volume_mount
 
-def add_allowed_users(c, users):
+def add_allowed_users(c, server_cfg):
     """
     Add users to JupyterHub allowed users
     args:
         c: JupyterHub config
         users: set users to be added to JupyterHub
     """
-    c.Authenticator.allowed_users |= users
+    # add all users once (or when the hub is restarted)
+    if "auto_add_users" in server_cfg:
+        new_allowed_users = set()
+        # load general hub user under users/<*.csv>
+        if "user_list_path" in server_cfg:
+            jupyterhub_users = get_jupyterhub_users(server_cfg)
+            for user_key in jupyterhub_users.keys():
+                new_allowed_users |= set(jupyterhub_users[user_key])
+                
+        # load user in each course under nbgrader/courses/<course_name>/<role>/<course_id>
+        course_cfg_list = get_course_config_and_user(server_cfg)
+        for cname in course_cfg_list.keys():
+            for role in course_cfg_list[cname].keys():
+                for cid in course_cfg_list[cname][role]:
+                    new_allowed_users |= set(course_cfg_list[cname][role][cid]["course_members"])
+
+        c.Authenticator.allowed_users.update(new_allowed_users)
     
 def get_course_config_and_user(server_cfg):
     """
