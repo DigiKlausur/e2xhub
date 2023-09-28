@@ -1,6 +1,7 @@
 import os
 from pathlib import Path
-from .utils import *
+
+# from .utils import *
 import pandas as pd
 from traitlets import Unicode, List
 from traitlets.config import LoggingConfigurable
@@ -537,61 +538,68 @@ class E2xHub(LoggingConfigurable):
             )
             sum_cmds += 1
 
-        # Setup exchange, write all commands to enable the exchange
-        if "exchange" in course_cfg:
-            spawner.log.info("[exchange cmds] looking into course exchange cmds")
-            exchange_commands = course_cfg["exchange"]
-            for exchange_cmd in exchange_commands:
-                spawner.log.info("[exchange cmds] executing: %s", exchange_cmd)
-                cmds.append("{}".format(exchange_cmd))
+        # Additional nbgrader commands
+        spawner.log.debug("[nbgrader_cmds] looking into default exchange cmds")
+        if "nbgrader_cmds" in nbgrader_cfg:
+            nbgrader_commands = nbgrader_cfg["nbgrader_cmds"]
+            for nbg_cmd in nbgrader_commands:
+                spawner.log.debug("[nbgrader_cmds] executing: %s", nbg_cmd)
+                cmds.append("{}".format(nbg_cmd))
                 sum_cmds += 1
-        else:
-            spawner.log.info("[exchange cmds] looking into default exchange cmds")
-            if "default_exchange" in nbgrader_cfg:
-                exchange_commands = nbgrader_cfg["default_exchange"]
-                for exchange_cmd in exchange_commands:
-                    spawner.log.info("[exchange cmds] executing: %s", exchange_cmd)
-                    cmds.append("{}".format(exchange_cmd))
-                    sum_cmds += 1
 
-        # check whether inbound, outbound and feedback are personalized
-        if "personalized_outbound" in course_cfg:
-            personalized_outbound = course_cfg["personalized_outbound"]
-            spawner.log.info(
-                "[outbound] Using personalized outbound: %s", personalized_outbound
+        # Configure exchange if given in nbgrader_cfg
+        exchange_configured = False
+        if "default_exchange" in nbgrader_cfg:
+            personalized_outbound = nbgrader_cfg["default_exchange"].get(
+                "personalized_outbound", False
             )
+            personalized_inbound = nbgrader_cfg["default_exchange"].get(
+                "personalized_inbound", False
+            )
+            personalized_feedback = nbgrader_cfg["default_exchange"].get(
+                "personalized_feedback", False
+            )
+            exchange_configured = True
+
+        # Configure exchange if given in course_exchange
+        if "course_exchange" in course_cfg:
+            personalized_outbound = course_cfg["course_exchange"].get(
+                "personalized_outbound", False
+            )
+            personalized_inbound = course_cfg["course_exchange"].get(
+                "personalized_inbound", False
+            )
+            personalized_feedback = course_cfg["course_exchange"].get(
+                "personalized_feedback", False
+            )
+            exchange_configured = True
+
+        # Add nbgrader exchange config
+        if exchange_configured:
             cmds.append(
                 f"echo 'c.Exchange.personalized_outbound = {personalized_outbound}' >> {self.nbgrader_config_path}"
             )
             sum_cmds += 1
-        else:
-            spawner.log.info("[outbound] Using default outbound")
-
-        if "personalized_inbound" in course_cfg:
-            personalized_inbound = course_cfg["personalized_inbound"]
-            spawner.log.info(
-                "[inbound] Using personalized inbound directory: %s",
-                personalized_inbound,
-            )
             cmds.append(
                 f"echo 'c.Exchange.personalized_inbound = {personalized_inbound}' >> {self.nbgrader_config_path}"
             )
             sum_cmds += 1
-        else:
-            spawner.log.info("[inbound] Using default submit directory")
-
-        if "personalized_feedback" in course_cfg:
-            personalized_feedback = course_cfg["personalized_feedback"]
-            spawner.log.info(
-                "[feedback] Using personalized feedback directory: %s",
-                personalized_feedback,
-            )
             cmds.append(
                 f"echo 'c.Exchange.personalized_feedback = {personalized_feedback}' >> {self.nbgrader_config_path}"
             )
             sum_cmds += 1
-        else:
-            spawner.log.info("[inbound] Using default feedback directory")
+
+            spawner.log.info(
+                "[outbound] Using personalized outbound: %s", personalized_outbound
+            )
+            spawner.log.info(
+                "[inbound] Using personalized inbound directory: %s",
+                personalized_inbound,
+            )
+            spawner.log.info(
+                "[feedback] Using personalized feedback directory: %s",
+                personalized_feedback,
+            )
 
         # add grader commands
         if not student:
@@ -728,16 +736,13 @@ class E2xHub(LoggingConfigurable):
         course_name, role, course_id = selected_profile.split("+")
         username = spawner.user.name
 
-        course_members = course_cfg_list[course_name]["grader"][course_id][
-            "course_members"
-        ]
+        course_cfg = course_cfg_list[course_name]["grader"][course_id]
+        course_members = course_cfg["course_members"]
 
         # mount home dir and the selected course dir if the user is grader
-        if username in course_members and course_id != "Default":
+        if username in course_members:
             # Load grader course config if given
-            grader_course_cfg = course_cfg_list[course_name]["grader"][course_id][
-                "course_config"
-            ]
+            grader_course_cfg = course_cfg["course_config"]
 
             # home volume subpath for grader
             home_volume_mountpath = f"/home/{username}"
@@ -771,30 +776,48 @@ class E2xHub(LoggingConfigurable):
             if self.course_volume_name:
                 spawner.volume_mounts.append(course_volume_mount)
 
+            nbgrader_cfg = get_nbgrader_cfg(server_cfg)
+            exchange_configured = (
+                True
+                if (
+                    "default_exchange" in nbgrader_cfg
+                    or "course_exchange" in grader_course_cfg
+                )
+                else False
+            )
+            print("#############################")
+            print("course cfg", course_cfg)
+            print(
+                "default_exchange: ",
+                True if "default_exchange" in nbgrader_cfg else False,
+            )
+            print(
+                "course exchange: ", True if "course_exchange" in course_cfg else False
+            )
+            print("configrued: ", exchange_configured)
             # configure exchange volume mount
-            if "exchange" not in grader_course_cfg:
+            if exchange_configured:
                 exchange_volume_mountpath = os.path.join(
                     self.nbgrader_exchange_root, course_id
                 )
                 exchange_volume_subpath = os.path.join(
                     self.exchange_volume_subpath, course_name, course_id
                 )
-
                 exchange_volume_mount = configure_volume_mount(
                     self.exchange_volume_name,
                     exchange_volume_mountpath,
-                    self.exchange_volume_subpath,
+                    exchange_volume_subpath,
                     read_only=False,
                 )
-
                 spawner.log.debug(
-                    "Grader exchange volume name is: %s", self.home_volume_name
+                    "[grader_exchange] Grader exchange volume name is: %s",
+                    self.exchange_volume_name,
                 )
                 if self.exchange_volume_name:
                     spawner.volume_mounts.append(exchange_volume_mount)
             else:
-                spawner.log.info(
-                    "grader exchange dir is configured in the course config"
+                spawner.log.warning(
+                    "[grader_exchange] Default exchange is not configured"
                 )
 
             # mount server config to admin users and if it's enabled in the server config
@@ -848,6 +871,7 @@ class E2xHub(LoggingConfigurable):
     def configure_student_volumes(
         self,
         spawner,
+        nbgrader_cfg,
         course_cfg_list,
         server_mode="teaching",
     ):
@@ -855,6 +879,7 @@ class E2xHub(LoggingConfigurable):
         Configure volume mounts for the student
         args:
           spawner: spawner object
+          nbgrader_cfg: default nbgrader config
           course_cfg_list: a dictionary containing course config
           server_mode: whether teaching or exam mode, used to differentiate
           home directory location on the nfs server. It's useful when the exam and
@@ -864,15 +889,12 @@ class E2xHub(LoggingConfigurable):
         course_name, role, course_id = selected_profile.split("+")
         username = spawner.user.name
 
-        course_members = course_cfg_list[course_name]["student"][course_id][
-            "course_members"
-        ]
+        course_cfg = course_cfg_list[course_name]["student"][course_id]
+        course_members = course_cfg["course_members"]
 
         if username in course_members:
             # Load grader course config if given
-            student_course_cfg = course_cfg_list[course_name]["student"][course_id][
-                "course_config"
-            ]
+            student_course_cfg = course_cfg["course_config"]
 
             home_volume_mountpath = f"/home/{username}"
             home_volume_subpath = os.path.join(
@@ -887,39 +909,48 @@ class E2xHub(LoggingConfigurable):
             if self.home_volume_name:
                 spawner.volume_mounts.append(home_volume_mount)
 
-            # setup exchange volumes if default nbgrader exchange is used
-            if "exchange" in student_course_cfg:
-                # Only web-based exchange supported
-                spawner.log.info(
-                    "[student][exchange] Using given exchange service "
-                    + "(Note only web-based exchange supported)"
+            # Configure exchange if given in nbgrader_cfg
+            exchange_configured = False
+            if "default_exchange" in nbgrader_cfg:
+                personalized_outbound = nbgrader_cfg["default_exchange"].get(
+                    "personalized_outbound", False
                 )
-            else:
-                spawner.log.debug(
-                    "[student][exchange] using default exchange directory"
+                personalized_inbound = nbgrader_cfg["default_exchange"].get(
+                    "personalized_inbound", False
                 )
-                spawner.log.debug(
-                    "[pre spawn hook] found course %s for %s", course_id, username
+                personalized_feedback = nbgrader_cfg["default_exchange"].get(
+                    "personalized_feedback", False
                 )
-                # check whether personalized inbound or outbound enabled
-                personalized_outbound = False
-                if "personalized_outbound" in student_course_cfg:
-                    personalized_outbound = student_course_cfg["personalized_outbound"]
-                if personalized_outbound:
-                    if "assignment_id" in student_course_cfg:
-                        assignment_id = student_course_cfg["assignment_id"]
-                    else:
-                        spawner.log.info(
-                            "[inbound] Using personalized outbound, but assignment_id is \
-                                          not given. The assignment_id will be unknown"
-                        )
-                        assignment_id = "unknown-assignment"
+                exchange_configured = True
 
+            # Configure exchange if given in course_exchange
+            if "course_exchange" in student_course_cfg:
+                personalized_outbound = student_course_cfg["course_exchange"].get(
+                    "personalized_outbound", False
+                )
+                personalized_inbound = student_course_cfg["course_exchange"].get(
+                    "personalized_inbound", False
+                )
+                personalized_feedback = student_course_cfg["course_exchange"].get(
+                    "personalized_feedback", False
+                )
+                exchange_configured = True
+
+            # configure exchange volumes if default nbgrader exchange is used
+            if exchange_configured:
+                spawner.log.debug(
+                    "[student][exchange] default exchange for %s %s is given",
+                    course_id,
+                    username,
+                )
+
+                # check whether personalized inbound or outbound enabled
+                if personalized_outbound:
+                    spawner.log.debug("[outbound] Using personalized outbound")
                     outbound_mount_mountpath = os.path.join(
                         self.nbgrader_exchange_root,
                         course_id,
                         "personalized-outbound",
-                        assignment_id,
                         username,
                     )
                     outbound_volume_subpath = os.path.join(
@@ -927,11 +958,11 @@ class E2xHub(LoggingConfigurable):
                         course_name,
                         course_id,
                         "personalized-outbound",
-                        assignment_id,
                         username,
                     )
+
                 else:
-                    spawner.log.info("[outbound] Using default outbound")
+                    spawner.log.debug("[outbound] Using default outbound")
                     outbound_mount_mountpath = os.path.join(
                         self.nbgrader_exchange_root, course_id, "outbound"
                     )
@@ -947,11 +978,8 @@ class E2xHub(LoggingConfigurable):
                 )
 
                 # configure inbound
-                personalized_inbound = False
-                if "personalized_inbound" in student_course_cfg:
-                    personalized_inbound = student_course_cfg["personalized_inbound"]
                 if personalized_inbound:
-                    spawner.log.info("[inbound] Using personalized inbound directory")
+                    spawner.log.debug("[inbound] Using personalized inbound directory")
                     inbound_volume_mountpath = os.path.join(
                         self.nbgrader_exchange_root,
                         course_id,
@@ -966,7 +994,7 @@ class E2xHub(LoggingConfigurable):
                         username,
                     )
                 else:
-                    spawner.log.info("[inbound] Using default submit directory")
+                    spawner.log.debug("[inbound] Using default submit directory")
                     inbound_volume_mountpath = os.path.join(
                         self.nbgrader_exchange_root, course_id, "inbound"
                     )
@@ -980,11 +1008,10 @@ class E2xHub(LoggingConfigurable):
                     inbound_volume_subpath,
                 )
                 # configure feedback
-                personalized_feedback = False
-                if "personalized_feedback" in student_course_cfg:
-                    personalized_feedback = student_course_cfg["personalized_feedback"]
                 if personalized_feedback:
-                    spawner.log.info("[feedback] using personalized feedback directory")
+                    spawner.log.debug(
+                        "[feedback] using personalized feedback directory"
+                    )
                     feedback_volume_mountpath = os.path.join(
                         self.nbgrader_exchange_root,
                         course_id,
@@ -999,7 +1026,7 @@ class E2xHub(LoggingConfigurable):
                         username,
                     )
                 else:
-                    spawner.log.info("[feedback] using default feedback directory")
+                    spawner.log.debug("[feedback] using default feedback directory")
                     feedback_volume_mountpath = os.path.join(
                         self.nbgrader_exchange_root, course_id, "feedback"
                     )
@@ -1018,6 +1045,7 @@ class E2xHub(LoggingConfigurable):
                     "Student exchange/inbound volume name is: %s",
                     self.exchange_volume_name,
                 )
+
                 if self.exchange_volume_name:
                     spawner.volume_mounts.append(outbound_volume_mount)
                     spawner.volume_mounts.append(inbound_volume_mount)
@@ -1028,6 +1056,11 @@ class E2xHub(LoggingConfigurable):
                         self.exchange_volume_name,
                         "consult k8s admin to provide the volume for exchange",
                     )
+            else:
+                spawner.log.warning(
+                    "[student][exchange] Default exchange is not configured. "
+                    + "Please configure it either using web-based or file-based exchange"
+                )
 
             spawner.log.debug(
                 "UID and GID for %s is changed to %s", username, spawner.environment
@@ -1172,20 +1205,24 @@ class E2xHub(LoggingConfigurable):
         admin_user = True if username in jupyterhub_users["admin_users"] else False
 
         is_grader = True if "grader" in selected_profile else False
-        # set grader volume mounts
-        if is_grader and check_consecutive_keys(server_cfg, "nbgrader", "enabled"):
-            self.configure_grader_volumes(
-                spawner,
-                server_cfg=server_cfg,
-                course_cfg_list=course_cfg_list,
-                admin_user=admin_user,
-            )
-
         spawner.log.debug("Grader status for user %s is %s", username, is_grader)
+
+        nbgrader_cfg = get_nbgrader_cfg(server_cfg)
+        # set grader volume mounts
+        if check_consecutive_keys(nbgrader_cfg, "enabled"):
+            if is_grader:
+                self.configure_grader_volumes(
+                    spawner,
+                    server_cfg=server_cfg,
+                    course_cfg_list=course_cfg_list,
+                    admin_user=admin_user,
+                )
 
         # set student volume mounts
         if not is_grader and selected_profile != "Default":
-            self.configure_student_volumes(spawner, course_cfg_list, server_mode="exam")
+            self.configure_student_volumes(
+                spawner, nbgrader_cfg, course_cfg_list, server_mode=server_mode
+            )
 
         # set additional course and extra volume mounts
         if selected_profile != "Default":
