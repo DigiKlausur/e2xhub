@@ -8,9 +8,9 @@ from traitlets.config import LoggingConfigurable
 
 class E2xHub(LoggingConfigurable):
     """
-    E2xHub extends the capabilities of JupyterHub to enable multi-course and 
-    multi-grader support, personalized profiles, and resource allocation, 
-    all of which can be easily configured using YAML.
+    E2xHub provides functionalities to enable multi-course and multi-grader support
+    in JupyterHub on Kubernetes such as personalized profiles, resource allocation,
+    and course management.
     """
 
     ipython_config_path = Unicode(
@@ -41,13 +41,6 @@ class E2xHub(LoggingConfigurable):
         they share the same path
         """,
     ).tag(config=True)
-
-    #home_volume_mountpath = Unicode(
-    #    '/home/jovyan',
-    #    help="""
-    #    Home volume mount path on the nfs client
-    #    """,
-    #).tag(config=True)
 
     course_volume_name = Unicode(
         'disk2',
@@ -218,7 +211,7 @@ class E2xHub(LoggingConfigurable):
         Parse exam kernel config
         args:
             spawner: kubespawner object
-            exam_kernel_cfg: exam kerne configuration to be parsed
+            exam_kernel_cfg: exam kernel configuration to parse
         """
         parsed_cfgs = []
         spawner.log.debug("Configuring exam kernel")
@@ -274,6 +267,7 @@ class E2xHub(LoggingConfigurable):
             
         cpu_guarantee = user_resources.get("cpu_guarantee",spawner.cpu_guarantee)
         cpu_limit = user_resources.get("cpu_limit", spawner.cpu_limit)
+        # convert memory to GB
         mem_guarantee = user_resources.get("mem_guarantee", 
                                               "{:.1f}G".format(spawner.mem_guarantee/1000000000))
         mem_limit = user_resources.get("mem_limit",
@@ -282,7 +276,7 @@ class E2xHub(LoggingConfigurable):
         # Default user node affinity
         user_node_affinity = spawner.node_affinity_required
         if "node_affinity" in user_resources:
-            user_node_affinity = list(user_resources["node_affinity"])
+            user_node_affinity = user_resources["node_affinity"]
             
         # course slug  must be unique for different role 
         # here we use {course_name}+{role} as slug
@@ -295,14 +289,15 @@ class E2xHub(LoggingConfigurable):
         
         # if grader, set color to blue to make it distinct with stud color
         if role == "grader":
-            course_display_name = f"<span style=\"color:blue;\">{course_display_name}</span>"
+            course_display_name = f"<span style=\"color:blue;\">{course_display_name} - grader </span>"
+        else:
+            course_display_name = f"{course_display_name} - student"
         spawner.log.debug(course_display_name)
 
         # parse profile
         parsed_course_profile = {
                 'display_name': f'{course_display_name}',
                 'slug': f'{course_slug}',
-                #'description': course_description,
                 'profile_options': {
                      'course_id_slug': {
                          'display_name': 'Semester',
@@ -310,7 +305,7 @@ class E2xHub(LoggingConfigurable):
                      },
                 },
                 'kubespawner_override': {
-                    'node_affinity_required': user_node_affinity
+                    'node_affinity_required': [user_node_affinity]
                 }
             } 
         
@@ -339,6 +334,7 @@ class E2xHub(LoggingConfigurable):
         profile_resources = course_cfg.get("resources", {})
         cpu_guarantee = profile_resources.get("cpu_guarantee",spawner.cpu_guarantee)
         cpu_limit = profile_resources.get("cpu_limit", spawner.cpu_limit)
+        # convert memory to GB
         mem_guarantee = profile_resources.get("mem_guarantee", 
                                               "{:.1f}G".format(spawner.mem_guarantee/1000000000))
         mem_limit = profile_resources.get("mem_limit",
@@ -384,12 +380,11 @@ class E2xHub(LoggingConfigurable):
         choice_display_name = course_cfg.get("choice_display_name", course_id)
         spawner.log.debug(choice_display_name)
 
-        # parse profile
+        # convert profile to KubeSpawner format
         parsed_semester_profile = {f'{course_id_slug}': {
-                'display_name': f'{choice_display_name}',
+                'display_name': choice_display_name,
                 'default': course_cfg.get("default", False),
                 'kubespawner_override': {
-                    #'description': course_description,
                     'cpu_limit': cpu_limit,
                     'cpu_guarantee': cpu_guarantee,
                     'mem_limit': '{}'.format(mem_limit),
@@ -417,7 +412,15 @@ class E2xHub(LoggingConfigurable):
         # add choices
         course_profile['profile_options']['course_id_slug']['choices'].update(parsed_semester_profile)
         # override course display name if given in each course id
-        course_profile['display_name'] = course_cfg.get("course_display_name", course_profile['display_name'])
+        course_display_name = course_cfg.get("course_display_name", course_profile['display_name'])
+        if role == "grader":
+            if "grader" not in course_display_name:
+                course_display_name = f"<span style=\"color:blue;\">{course_display_name} - grader</span>"
+        else:
+            if "student" not in course_display_name:
+                course_display_name = f"{course_display_name} - student"
+            
+        course_profile['display_name'] = course_display_name
         
     def init_profile_list(self, spawner, server_cfg):
         """
@@ -628,8 +631,15 @@ class E2xHub(LoggingConfigurable):
             # only show profile to members registered in the courses 
             # at least the user exist in one of the choices
             if is_user_course_member:
+                # sort semester choices based on semester
+                semester_choices = course_profile['profile_options']['course_id_slug']['choices']
+                sorted_semester_choices = sorted(semester_choices.items(), key=lambda x: x[1]['display_name'])
+                course_profile['profile_options']['course_id_slug']['choices'] = dict(sorted_semester_choices)
                 profile_list.append(course_profile)
-
+                
+        # sort profile alphabetically
+        profile_list = sorted(profile_list, key=lambda x: x['display_name'])
+        
         return profile_list    
     
     
