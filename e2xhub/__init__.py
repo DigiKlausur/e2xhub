@@ -1,6 +1,7 @@
 """
-E2xHub is built on top of JupyterHub using Z2JH to simply course
-management in education.
+E2xHub provides functionalities to enable multi-course and multi-grader support
+in JupyterHub on Kubernetes such as personalized profiles, resource allocation,
+and course management.
 """
 
 from .__version__ import __version__
