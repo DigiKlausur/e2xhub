@@ -16,6 +16,23 @@ def load_yaml(yaml_file):
     return configs
 
 
+def load_df(df_path):
+    """
+    Load pandas dataframe and return empty df if there is an error
+    args:
+        df_path: path to the csv file
+    """
+    df = pd.DataFrame()
+    try:
+        df = pd.read_csv(df_path)
+    except pd.errors.EmptyDataError as e:
+        print("EmptyDataError: No columns to parse from file")
+    except Exception as e:
+        print(f"An error occurred: {str(e)}")
+
+    return df
+
+
 def get_directory(server_cfg, directory_key):
     """
     Get directory path given config and directory key.
@@ -67,18 +84,16 @@ def get_jupyterhub_users(server_cfg):
         and ".csv" in item.name.lower()
     ]
     for user_file_path in user_list_file_path:
-        if "admin" in user_file_path.name.lower():
-            jupyterhub_users["admin_users"].extend(
-                list(pd.read_csv(user_file_path).Username.str.strip())
-            )
-        elif "allowed_users" in user_file_path.name.lower():
-            jupyterhub_users["allowed_users"].extend(
-                list(pd.read_csv(user_file_path).Username.str.strip())
-            )
-        elif "blocked_users" in user_file_path.name.lower():
-            jupyterhub_users["blocked_users"].extend(
-                list(pd.read_csv(user_file_path).Username.str.strip())
-            )
+        df = load_df(pd.read_csv(user_file_path))
+        if "Username" in df.columns:
+            user_list = list(df.Username.str.strip())
+
+            if "admin" in user_file_path.name.lower():
+                jupyterhub_users["admin_users"].extend(user_list)
+            elif "allowed_users" in user_file_path.name.lower():
+                jupyterhub_users["allowed_users"].extend(user_list)
+            elif "blocked_users" in user_file_path.name.lower():
+                jupyterhub_users["blocked_users"].extend(user_list)
 
     return jupyterhub_users
 
@@ -138,24 +153,33 @@ def add_allowed_users(c, server_cfg):
         users: set users to be added to JupyterHub
     """
     # add all users once (or when the hub is restarted)
-    if "auto_add_users" in server_cfg:
-        new_allowed_users = set()
-        # load general hub user under users/<*.csv>
-        if "user_list_path" in server_cfg:
+    new_allowed_users = set()
+
+    # load general hub user under users/<*.csv>
+    if "user_list_path" in server_cfg:
+        auto_add_hub_users = server_cfg.get("auto_add_hub_users", False)
+        if auto_add_hub_users:
             jupyterhub_users = get_jupyterhub_users(server_cfg)
             for user_key in jupyterhub_users.keys():
                 new_allowed_users |= set(jupyterhub_users[user_key])
 
-        # load user in each course under nbgrader/courses/<course_name>/<role>/<course_id>
-        course_cfg_list = get_course_config_and_user(server_cfg)
-        for cname in course_cfg_list.keys():
-            for role in course_cfg_list[cname].keys():
+    # Add user in each course under nbgrader/courses/<course_name>/<role>/<course_id>
+    # to the allowed list if the config permits
+    course_cfg_list = get_course_config_and_user(server_cfg)
+    nbgrader_cfg = get_nbgrader_cfg(server_cfg)
+    auto_add_graders = nbgrader_cfg.get("auto_add_graders", False)
+    auto_add_students = nbgrader_cfg.get("auto_add_students", False)
+    for cname in course_cfg_list.keys():
+        for role in course_cfg_list[cname].keys():
+            if (role == "student" and auto_add_students) or (
+                role == "grader" and auto_add_graders
+            ):
                 for cid in course_cfg_list[cname][role]:
                     new_allowed_users |= set(
                         course_cfg_list[cname][role][cid]["course_members"]
                     )
 
-        c.Authenticator.allowed_users.update(new_allowed_users)
+    c.Authenticator.allowed_users.update(new_allowed_users)
 
 
 def get_course_config_and_user(server_cfg):
@@ -232,7 +256,9 @@ def get_course_config_and_user(server_cfg):
                     ]
                     user_list = []
                     if user_path:
-                        user_list = list(pd.read_csv(user_path[0]).Username.str.strip())
+                        df = load_df(user_path[0])
+                        if "Username" in df.columns:
+                            user_list = list(df.Username.str.strip())
 
                     course_cfg_and_user[course_path.name][role_path.name][cl.stem][
                         "course_members"
