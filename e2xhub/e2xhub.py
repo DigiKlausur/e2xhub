@@ -199,6 +199,40 @@ class E2xHub(LoggingConfigurable):
     def __init__(self, **kwargs):
         super(E2xHub, self).__init__(**kwargs)
 
+    def _get_jupyterhub_users(self, server_cfg):
+        """
+        Get JupyterHub users (allowed_users, blocked_users, and admin_users).
+        ToDo: this is a workaround function as it does not work when imported from utils
+        args:
+            server_cfg: server configuration
+        """
+        jupyterhub_users = {"allowed_users": [], "blocked_users": [], "admin_users": []}
+
+        if "user_list_path" not in server_cfg:
+            return jupyterhub_users
+
+        user_list_path = Path(server_cfg["user_list_path"])
+        user_list_file_path = [
+            item
+            for item in user_list_path.iterdir()
+            if item.is_file()
+            and not item.name.startswith(".")
+            and ".csv" in item.name.lower()
+        ]
+
+        for user_file_path in user_list_file_path:
+            df = load_df(user_file_path)
+            if "Username" in df.columns:
+                user_list = list(df.Username.str.strip())
+                if "admin_users" in user_file_path.name.lower():
+                    jupyterhub_users["admin_users"].extend(user_list)
+                elif "allowed_users" in user_file_path.name.lower():
+                    jupyterhub_users["allowed_users"].extend(user_list)
+                elif "blocked_users" in user_file_path.name.lower():
+                    jupyterhub_users["blocked_users"].extend(user_list)
+
+        return jupyterhub_users
+
     def parse_exam_kernel_cfg(self, spawner, exam_kernel_cfg):
         """
         Parse exam kernel config
@@ -813,7 +847,11 @@ class E2xHub(LoggingConfigurable):
 
             # mount server config to admin users and if it's enabled in the server config
             # this will allow admins to modify config in their notebooks server
-            mount_server_config = server_cfg.get("mount_server_config", False)
+            # mount_server_config = server_cfg.get("mount_server_config", False)
+            mount_server_config = False
+            if "mount_server_config" in server_cfg:
+                mount_server_config = server_cfg["mount_server_config"]
+
             if admin_user and mount_server_config:
                 config_volume_mount = configure_volume_mount(
                     self.config_volume_name,
@@ -1174,8 +1212,7 @@ class E2xHub(LoggingConfigurable):
         # any user file name containing "admin" will be grouped as admin_users
         # allowed_users grouped to allowed_users, as well as blocked_users
         jupyterhub_users = {"allowed_users": [], "blocked_users": [], "admin_users": []}
-        if "user_list_path" in server_cfg:
-            jupyterhub_users = get_jupyterhub_users(server_cfg)
+        jupyterhub_users = self._get_jupyterhub_users(server_cfg)
 
         # get course config and its members
         course_cfg_list = get_course_config_and_user(server_cfg)
