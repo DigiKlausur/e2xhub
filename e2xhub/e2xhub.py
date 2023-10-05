@@ -351,7 +351,15 @@ class E2xHub(LoggingConfigurable):
                     "choices": {},
                 },
             },
-            "kubespawner_override": {"node_affinity_required": [user_node_affinity]},
+            "kubespawner_override": {
+                "cpu_limit": cpu_limit,
+                "cpu_guarantee": cpu_guarantee,
+                "mem_limit": "{}".format(mem_limit),
+                "mem_guarantee": "{}".format(mem_guarantee),
+                "image": image,
+                "image_pull_policy": image_pull_policy,
+                "node_affinity_required": [user_node_affinity],
+            },
         }
 
         return parsed_course_profile
@@ -383,7 +391,11 @@ class E2xHub(LoggingConfigurable):
         image = course_cfg.get("image", spawner.image)
         image_pull_policy = course_cfg.get("pullPolicy", spawner.image_pull_policy)
 
-        profile_resources = course_cfg.get("resources", {})
+        # get course semester resource, otherwise use course resource
+        profile_resources = course_cfg.get(
+            "resources", course_profile["kubespawner_override"]
+        )
+
         cpu_guarantee = profile_resources.get("cpu_guarantee", spawner.cpu_guarantee)
         cpu_limit = profile_resources.get("cpu_limit", spawner.cpu_limit)
         # convert memory to GB
