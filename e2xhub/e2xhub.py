@@ -300,6 +300,7 @@ class E2xHub(LoggingConfigurable):
             course_name: name of the course
             role: role of the user e.g. student, grader. This will reflect the course slug
         """
+
         image = server_cfg.get("image", spawner.image)
         image_pull_policy = server_cfg.get("pullPolicy", spawner.image_pull_policy)
 
@@ -387,15 +388,25 @@ class E2xHub(LoggingConfigurable):
             role: role of the user e.g. student, grader. This will reflect the course slug
         """
         verbose_profile_list = course_cfg.get("verbose_profile_list", False)
-        # set image resources to default
-        image = course_cfg.get("image", spawner.image)
-        image_pull_policy = course_cfg.get("pullPolicy", spawner.image_pull_policy)
+
+        # set image if given in smt course_profile resources,
+        # otherwise course image, otherwise default image
+        image = course_cfg.get(
+            "image", course_profile["kubespawner_override"].get("image", spawner.image)
+        )
+        image_pull_policy = course_cfg.get(
+            "pullPolicy",
+            course_profile["kubespawner_override"].get(
+                "image_pull_policy", spawner.image_pull_policy
+            ),
+        )
 
         # get course semester resource, otherwise use course resource
         profile_resources = course_cfg.get(
             "resources", course_profile["kubespawner_override"]
         )
 
+        # set cpu and memory
         cpu_guarantee = profile_resources.get("cpu_guarantee", spawner.cpu_guarantee)
         cpu_limit = profile_resources.get("cpu_limit", spawner.cpu_limit)
         # convert memory to GB
